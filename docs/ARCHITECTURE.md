@@ -67,15 +67,19 @@ flowchart LR
 - Validate operator song requests before browser startup.
 - Build the Suno auth adapter and verify the operator's saved session before
   running create-page workflows.
+- Centralize Suno create-page selectors and fixture-backed page-state extraction.
 - Choose bounded Suno create-page workflows.
 - Construct GSV `VisitPlan` instances.
 - Emit Suno-specific generation evidence events.
 
 **Key Files**:
 - `suno_assistant/auth.py`
+- `suno_assistant/selectors.py`
+- `suno_assistant/extractors.py`
 - `suno_assistant/main.py`
 - `suno_assistant/requests.py`
 - `suno_assistant/visit.py`
+- `tests/fixtures/suno/*.html`
 
 ### gentle-site-visitor Framework
 
@@ -100,10 +104,14 @@ observability mechanics.
    authenticated create page is reachable.
 4. If auth is missing or expired, Suno Assistant returns a blocked auth result
    before building or executing any generation plan.
-5. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
-6. Suno Assistant builds a request-aware GSV `VisitPlan`.
-7. GSV executes the plan through browser/session/pacing/observability layers.
-8. Suno Assistant receives generation evidence rows and run artifacts for review.
+5. Suno Assistant classifies the loaded create-page state with centralized
+   selectors and extraction helpers.
+6. Known page blocks such as auth-required, quota unavailable, policy rejection,
+   disabled controls, or missing prompt controls are surfaced as explicit states.
+7. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
+8. Suno Assistant builds a request-aware GSV `VisitPlan`.
+9. GSV executes the plan through browser/session/pacing/observability layers.
+10. Suno Assistant receives generation evidence rows and run artifacts for review.
 
 ## Design Decisions
 
@@ -164,6 +172,23 @@ storage state before any create-page workflow.
 - Pro: Manual verification remains operator-controlled.
 - Con: The operator must refresh local storage state when Suno expires the session.
 
+### Decision 5: Keep Selectors And Extractors Fixture-Backed
+
+**Context**: Suno's create page can change independently of this project, while
+CI should not depend on live Suno access or consume account quota.
+
+**Decision**: Keep selector fallback groups in `suno_assistant/selectors.py`,
+HTML-to-state extraction in `suno_assistant/extractors.py`, and sanitized create
+state fixtures under `tests/fixtures/suno/`.
+
+**Consequences**:
+- Pro: Selector and state-classification drift has focused regression tests.
+- Pro: Generation-plan work can consume named page states instead of scattering
+  raw selectors through visit steps.
+- Pro: CI remains offline and does not need authenticated Suno access.
+- Con: Fixture coverage must be refreshed when real UI states diverge from the
+  sanitized snapshots.
+
 ## Performance Considerations
 
 - Favor slow, bounded, observable runs over throughput.
@@ -181,6 +206,6 @@ storage state before any create-page workflow.
 
 ## Future Enhancements
 
-- [ ] Expand the create-page smoke run into a richer Suno site adapter and selector module.
+- [x] Expand the create-page smoke run into a richer Suno site adapter and selector module.
 - [ ] Add prompt-to-song generation steps and Suno-specific evidence extraction beyond the initial create-page visit.
 - [ ] Add headed smoke-run instructions using GSV observability.

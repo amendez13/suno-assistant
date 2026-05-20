@@ -152,11 +152,13 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Template instantiated
 - `gentle-site-visitor` dependency wired
 - Suno create-page visit plan wired
+- Suno auth/session bootstrap wired
+- Suno create-page selector and fixture-backed extractor layer wired
 
-**Next Phase:** Suno reference plan
-- Site adapter
-- Selectors and extraction fixtures
-- Headed smoke-run workflow
+**Next Phase:** Bounded prompt-to-song generation plan
+- Request-aware create-page form fill
+- Bounded submit and completion wait
+- Generation evidence and review artifacts
 
 **Future:** Operations hardening
 - Dependency upgrade and release pinning review
