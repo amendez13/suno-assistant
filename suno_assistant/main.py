@@ -18,8 +18,11 @@ from gsv.config import SiteConfig, VisitorConfig
 from gsv.config.loader import load_config
 from gsv.observability import RunRef, SessionRecorder
 from gsv.pacing import build_pacing
+from gsv.session import Session
 from gsv.visit import VisitContext, VisitResult, VisitRunner
+from gsv.visit.plan import StepResult
 
+from .auth import AUTH_REQUIRED_MESSAGE, build_suno_auth_adapter
 from .logging_config import configure_logging
 from .release_info import get_release_info
 from .requests import SongRequest, SongRequestError, load_song_request
@@ -76,6 +79,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--keep-open",
         action="store_true",
         help="Keep the headed browser open after the create-page visit until you close the window or interrupt the run.",
+    )
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Run the headed manual Suno login bootstrap and persist local browser storage state.",
     )
     request_group = parser.add_mutually_exclusive_group()
     request_group.add_argument("--request", type=Path, help="Path to a YAML song request file.")
@@ -140,22 +148,57 @@ async def keep_browser_open(page: Any) -> None:
         await asyncio.sleep(0.5)
 
 
+def build_auth_required_result(error: str = AUTH_REQUIRED_MESSAGE) -> VisitResult:
+    """Build a blocked visit result for missing or expired Suno auth."""
+    return VisitResult(
+        outcome="blocked",
+        error=error,
+        counters={"auth_required": 1},
+        extracted={},
+        step_results=[StepResult(name="verify_suno_auth", outcome="fail", error=error)],
+    )
+
+
+def build_login_result(*, authenticated: bool) -> VisitResult:
+    """Build a synthetic result for the manual login bootstrap path."""
+    if authenticated:
+        return VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"auth_bootstrap_completed": 1},
+            extracted={},
+            step_results=[StepResult(name="suno_login_bootstrap", outcome="ok")],
+        )
+    return build_auth_required_result("Suno login did not reach the authenticated create page before timeout.")
+
+
 async def run_create_visit(
     config_path: Path,
     *,
     headed: bool = False,
     keep_open: bool = False,
+    login: bool = False,
     song_request: SongRequest | None = None,
 ) -> VisitResult:
     """Run a single Suno create-page visit through the gsv runtime."""
     resolved = load_runtime_config(config_path, headed=headed)
     browser = BrowserManager(resolved.visitor, resolved.site, rng=random.Random())
     recorder = open_session_recorder(resolved.visitor, resolved.site, browser)
+    session = Session(browser, build_suno_auth_adapter(resolved.site), resolved.visitor, rng=random.Random())
     visit_result: VisitResult | None = None
 
     try:
         browser.attach_recorder(recorder)
-        await browser.start()
+        authenticated = await session.login() if login else await session.start()
+        if not authenticated:
+            visit_result = build_login_result(authenticated=False) if login else build_auth_required_result()
+            return visit_result
+        if login:
+            visit_result = build_login_result(authenticated=True)
+            if keep_open:
+                page = await browser.new_page()
+                await keep_browser_open(page)
+            return visit_result
         await browser.enable_har_for_session()
         await browser.start_tracing()
         page = await browser.new_page()
@@ -173,7 +216,8 @@ async def run_create_visit(
             await keep_browser_open(page)
         return visit_result
     finally:
-        await browser.save_session()
+        if session.is_authenticated:
+            await browser.save_session()
         await finalize_recording(browser, recorder, visit_result)
         await browser.close()
 
@@ -190,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
     print(dependency_summary())
     if args.summary_only:
         return 0
+    if args.login and not args.headed:
+        print("Invalid login request: use --headed --login for manual Suno login bootstrap.", file=sys.stderr)
+        return 2
     try:
         song_request = resolve_song_request(args)
     except SongRequestError as exc:
@@ -198,7 +245,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     result = asyncio.run(
-        run_create_visit(args.config, headed=args.headed, keep_open=args.keep_open, song_request=song_request)
+        run_create_visit(
+            args.config,
+            headed=args.headed,
+            keep_open=args.keep_open,
+            login=args.login,
+            song_request=song_request,
+        )
     )
     print(f"Run {result.outcome}: {describe_project().site_name}")
     return 0 if result.outcome == "completed" else 1
