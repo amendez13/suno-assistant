@@ -182,6 +182,19 @@ empty prompts, unknown fields, unsupported count values, lyrics on instrumental
 requests, or explicit requests to imitate a specific artist or voice return an
 error without launching a Suno browser session.
 
+When a request is supplied and the saved Suno session is authenticated, Suno
+Assistant runs the bounded MVP generation plan:
+
+1. Navigate to `https://suno.com/create`.
+2. Verify the create page is ready and not blocked by auth, quota, or policy states.
+3. Fill the prompt and supported optional fields from the validated request.
+4. Submit one create/generate action.
+5. Wait within a bounded timeout for visible result cards or known blocked states.
+
+The MVP path does not download generated audio, retry around platform blocks, or
+automate CAPTCHA/MFA. Live generation can consume account quota or credits, so
+use low-impact original prompts for manual smoke runs.
+
 ## Session Notes
 
 This template treats session notes as committed project history, not private scratch files.

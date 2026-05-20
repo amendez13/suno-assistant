@@ -156,8 +156,8 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Suno create-page selector and fixture-backed extractor layer wired
 
 **Next Phase:** Bounded prompt-to-song generation plan
-- Request-aware create-page form fill
-- Bounded submit and completion wait
+- Request-aware create-page form fill wired
+- Bounded submit and completion wait wired
 - Generation evidence and review artifacts
 
 **Future:** Operations hardening

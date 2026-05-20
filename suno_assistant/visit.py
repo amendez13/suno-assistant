@@ -7,6 +7,13 @@ from gsv.visit import VisitContext, VisitPlan
 from gsv.visit.steps import Navigate
 
 from .requests import SongRequest
+from .steps import (
+    FillSunoRequest,
+    SubmitGeneration,
+    VerifyCreatePageReady,
+    WaitForGenerationResult,
+    classify_generation_outcome,
+)
 
 SUNO_CREATE_URL = "https://suno.com/create"
 
@@ -14,14 +21,24 @@ SUNO_CREATE_URL = "https://suno.com/create"
 def build_plan(ctx: VisitContext | None = None, *, song_request: SongRequest | None = None) -> VisitPlan:
     """Build the first bounded Suno plan."""
     del ctx
-    del song_request
+    steps = [
+        Navigate(
+            url=SUNO_CREATE_URL,
+            name="navigate_create_page",
+        )
+    ]
+    if song_request is not None:
+        steps.extend(
+            [
+                VerifyCreatePageReady(),
+                FillSunoRequest(song_request),
+                SubmitGeneration(),
+                WaitForGenerationResult(),
+            ]
+        )
     return VisitPlan(
-        steps=[
-            Navigate(
-                url=SUNO_CREATE_URL,
-                name="navigate_create_page",
-            )
-        ]
+        steps=steps,
+        outcome_classifier=classify_generation_outcome if song_request is not None else None,
     )
 
 

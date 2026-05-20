@@ -69,6 +69,8 @@ flowchart LR
   running create-page workflows.
 - Centralize Suno create-page selectors and fixture-backed page-state extraction.
 - Choose bounded Suno create-page workflows.
+- Fill and submit one bounded generation request when a validated song request
+  is supplied.
 - Construct GSV `VisitPlan` instances.
 - Emit Suno-specific generation evidence events.
 
@@ -76,6 +78,7 @@ flowchart LR
 - `suno_assistant/auth.py`
 - `suno_assistant/selectors.py`
 - `suno_assistant/extractors.py`
+- `suno_assistant/steps.py`
 - `suno_assistant/main.py`
 - `suno_assistant/requests.py`
 - `suno_assistant/visit.py`
@@ -108,10 +111,12 @@ observability mechanics.
    selectors and extraction helpers.
 6. Known page blocks such as auth-required, quota unavailable, policy rejection,
    disabled controls, or missing prompt controls are surfaced as explicit states.
-7. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
-8. Suno Assistant builds a request-aware GSV `VisitPlan`.
-9. GSV executes the plan through browser/session/pacing/observability layers.
-10. Suno Assistant receives generation evidence rows and run artifacts for review.
+7. When a request is present, Suno Assistant fills supported create-page fields
+   and submits one create/generate action.
+8. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
+9. Suno Assistant builds a request-aware GSV `VisitPlan`.
+10. GSV executes the plan through browser/session/pacing/observability layers.
+11. Suno Assistant receives generation evidence rows and run artifacts for review.
 
 ## Design Decisions
 
@@ -189,6 +194,21 @@ state fixtures under `tests/fixtures/suno/`.
 - Con: Fixture coverage must be refreshed when real UI states diverge from the
   sanitized snapshots.
 
+### Decision 6: Keep The First Generation Plan Narrow
+
+**Context**: The first prompt-to-song workflow can consume external account
+quota and depends on a changing authenticated UI.
+
+**Decision**: When a validated request is supplied, the plan verifies page
+readiness, fills supported fields, submits once, and waits within a bounded
+timeout for either visible result cards or known blocked states.
+
+**Consequences**:
+- Pro: One CLI invocation has an explicit submit boundary and bounded wait.
+- Pro: Known platform blocks classify as `blocked` instead of false success.
+- Pro: Step tests can use fake pages and offline fixtures before live smoke.
+- Con: Batch submission, downloads, and durable evidence schema are deferred.
+
 ## Performance Considerations
 
 - Favor slow, bounded, observable runs over throughput.
@@ -207,5 +227,6 @@ state fixtures under `tests/fixtures/suno/`.
 ## Future Enhancements
 
 - [x] Expand the create-page smoke run into a richer Suno site adapter and selector module.
-- [ ] Add prompt-to-song generation steps and Suno-specific evidence extraction beyond the initial create-page visit.
+- [x] Add initial prompt-to-song generation steps beyond the create-page visit.
+- [ ] Add durable Suno-specific evidence extraction and artifact review beyond the minimal submit event.
 - [ ] Add headed smoke-run instructions using GSV observability.
