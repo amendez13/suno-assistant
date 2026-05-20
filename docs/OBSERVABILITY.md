@@ -161,6 +161,37 @@ python -m suno_assistant.main --config config/config.yaml --headed --login
 The storage state at `data/browser/suno/state.json` is sensitive local data. Do
 not commit it, copy it into issue threads, or include it in PR artifacts.
 
+## Suno Generation Evidence
+
+Request-aware generation runs write Suno-specific events through the active GSV
+evidence sink. With the default session recorder, inspect:
+
+```bash
+ls data/sessions/suno/
+tail -n 20 data/sessions/suno/<session-id>/evidence.jsonl
+```
+
+Current event types:
+
+- `request_loaded`: request id, prompt, prompt hash, title/style flags, count, mode flags, and tags.
+- `generation_submitted`: request id, submit attempt, timestamp, and field summary.
+- `generation_completed`: request id, visible result count, titles, IDs, and URLs when present.
+- `generation_blocked`: request id, phase, block reason, safe visible message, and compact page state.
+- `generation_failed`: request id, phase, error summary, and compact page state when available.
+
+Manifest counters use Suno-specific names:
+
+- `suno.requests_loaded`
+- `suno.requests_submitted`
+- `suno.generations_requested`
+- `suno.generations_detected`
+- `suno.blocked_states_detected`
+- `suno.policy_blocks_detected`
+
+Evidence does not download audio files or store cookies/storage state, but it
+does include operator-supplied prompt text and visible result metadata. Treat
+`data/sessions/` as sensitive local run history.
+
 ## Verifying Loki Ingestion
 
 Start with journald:

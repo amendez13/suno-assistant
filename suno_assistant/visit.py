@@ -30,10 +30,10 @@ def build_plan(ctx: VisitContext | None = None, *, song_request: SongRequest | N
     if song_request is not None:
         steps.extend(
             [
-                VerifyCreatePageReady(),
+                VerifyCreatePageReady(song_request),
                 FillSunoRequest(song_request),
-                SubmitGeneration(),
-                WaitForGenerationResult(),
+                SubmitGeneration(song_request),
+                WaitForGenerationResult(song_request),
             ]
         )
     return VisitPlan(

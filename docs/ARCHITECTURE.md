@@ -78,6 +78,7 @@ flowchart LR
 - `suno_assistant/auth.py`
 - `suno_assistant/selectors.py`
 - `suno_assistant/extractors.py`
+- `suno_assistant/evidence.py`
 - `suno_assistant/steps.py`
 - `suno_assistant/main.py`
 - `suno_assistant/requests.py`
@@ -116,7 +117,8 @@ observability mechanics.
 8. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
 9. Suno Assistant builds a request-aware GSV `VisitPlan`.
 10. GSV executes the plan through browser/session/pacing/observability layers.
-11. Suno Assistant receives generation evidence rows and run artifacts for review.
+11. Suno Assistant writes request, submit, completed, blocked, or failed evidence rows.
+12. Operators review evidence rows and run artifacts from the local GSV session bundle.
 
 ## Design Decisions
 
@@ -209,6 +211,21 @@ timeout for either visible result cards or known blocked states.
 - Pro: Step tests can use fake pages and offline fixtures before live smoke.
 - Con: Batch submission, downloads, and durable evidence schema are deferred.
 
+### Decision 7: Store Reviewable Local Evidence, Not Media
+
+**Context**: Operators need to understand what was requested and what Suno
+reported without replaying the browser session.
+
+**Decision**: Write structured JSONL events for request loading, submit attempts,
+terminal blocked/failed/completed states, and visible result metadata. Do not
+download audio files or store cookies/storage state in evidence.
+
+**Consequences**:
+- Pro: Each submit attempt has a traceable local record.
+- Pro: Terminal outcomes can be reviewed from `evidence.jsonl` and manifest counters.
+- Pro: Evidence remains metadata-oriented rather than media archival.
+- Con: Prompt text and visible result metadata are still sensitive local artifacts.
+
 ## Performance Considerations
 
 - Favor slow, bounded, observable runs over throughput.
@@ -228,5 +245,5 @@ timeout for either visible result cards or known blocked states.
 
 - [x] Expand the create-page smoke run into a richer Suno site adapter and selector module.
 - [x] Add initial prompt-to-song generation steps beyond the create-page visit.
-- [ ] Add durable Suno-specific evidence extraction and artifact review beyond the minimal submit event.
+- [x] Add durable Suno-specific evidence extraction and artifact review beyond the minimal submit event.
 - [ ] Add headed smoke-run instructions using GSV observability.
