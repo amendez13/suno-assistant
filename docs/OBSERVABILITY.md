@@ -192,6 +192,21 @@ Evidence does not download audio files or store cookies/storage state, but it
 does include operator-supplied prompt text and visible result metadata. Treat
 `data/sessions/` as sensitive local run history.
 
+### Artifact Review Checklist
+
+After a headed smoke run, inspect the newest session bundle:
+
+```bash
+SESSION_DIR="$(ls -td data/sessions/suno/* | head -n 1)"
+cat "$SESSION_DIR/manifest.json"
+tail -n 50 "$SESSION_DIR/evidence.jsonl"
+```
+
+Confirm that request-aware runs have `request_loaded`,
+`generation_submitted`, and one terminal generation event. Then decide whether
+to keep or purge the local artifacts. Use [MANUAL_SMOKE.md](MANUAL_SMOKE.md) for
+the full live smoke checklist and cleanup commands.
+
 ## Verifying Loki Ingestion
 
 Start with journald:

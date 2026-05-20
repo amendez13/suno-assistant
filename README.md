@@ -15,10 +15,10 @@ bounded browser execution, pacing, persisted session state, and run artifacts.
 
 - Site-specific Suno visit plans kept outside the reusable framework.
 - A bounded create-page smoke run that exercises the Suno-specific app through `gsv`.
-- A future prompt-to-song workflow for original song instructions, generation requests, and evidence capture.
+- A bounded prompt-to-song workflow for original song instructions, generation requests, and evidence capture.
 - Gentle human-cadence browsing through `gentle-site-visitor` primitives.
 - Per-run observability through manifests, evidence JSONL, HAR, trace, and logs.
-- Private-repository workflow with CI, pre-commit, branch protection docs, and session notes.
+- Repository workflow with CI, pre-commit, branch protection docs, and session notes.
 
 ## Quick Start
 
@@ -125,6 +125,10 @@ Events include `request_loaded`, `generation_submitted`,
 contains the explicit prompt and visible result metadata, so treat session
 artifacts as sensitive local files.
 
+For the full operator checklist, including headed login bootstrap, bounded live
+smoke runs, evidence review, and artifact cleanup, see
+[docs/MANUAL_SMOKE.md](docs/MANUAL_SMOKE.md).
+
 ## Configuration
 
 Configuration is stored in `config/config.yaml`. See `config/config.example.yaml` for all available options.
@@ -166,6 +170,8 @@ notes: "Optional local-only notes"
 Validation rejects empty prompts, unknown fields, non-positive or overly broad
 counts, lyrics on instrumental requests, and explicit requests to imitate a
 specific artist or voice. The initial hard cap is `4` generations per request.
+Validation happens before browser startup for `--prompt` and `--request`; the
+MVP CLI does not include a separate dry-run flag.
 
 ## Project Structure
 
