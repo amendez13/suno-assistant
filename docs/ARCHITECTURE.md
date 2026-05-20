@@ -84,7 +84,7 @@ observability mechanics.
 - Session artifacts and diagnostics.
 
 **Key Files**:
-- External dependency: `gentle-site-visitor @ git+ssh://git@github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1`
+- External dependency: `gentle-site-visitor @ git+https://github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1`
 
 ## Data Flow
 
@@ -134,8 +134,7 @@ rate-limit settings, and session artifacts.
 - Do not commit Suno credentials, cookies, storage state, HARs, traces,
   or raw page artifacts.
 - Keep `config/config.yaml` and `data/` untracked.
-- Configure private Git dependency access through deploy keys or package
-  registry credentials in CI.
+- Keep the pinned public `gentle-site-visitor` dependency explicit and reviewable in CI.
 - Respect Suno terms, account constraints, applicable robots guidance, rights of
   third parties, and any artist/style/content restrictions.
 

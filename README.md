@@ -126,7 +126,7 @@ repository owns browser/session/pacing/observability/run mechanics.
 The framework dependency is a Git URL pinned to a release tag for repeatable installs:
 
 ```text
-gentle-site-visitor @ git+ssh://git@github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1
+gentle-site-visitor @ git+https://github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1
 ```
 
 Use an adjacent editable checkout when developing framework and app changes together.
