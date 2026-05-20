@@ -90,6 +90,11 @@ The browser storage state is saved locally under `data/browser/suno/state.json`
 after authenticated runs, so login state, cookie consent, and other local
 session state can be reused on the next launch.
 
+Before running a live prompt-to-song smoke request, review the operator checklist
+in [MANUAL_SMOKE.md](MANUAL_SMOKE.md). Live request-aware runs can consume Suno
+account quota or credits and write prompt/result metadata into local session
+artifacts.
+
 ## Configuration
 
 ### config/config.yaml
@@ -194,6 +199,10 @@ Assistant runs the bounded MVP generation plan:
 The MVP path does not download generated audio, retry around platform blocks, or
 automate CAPTCHA/MFA. Live generation can consume account quota or credits, so
 use low-impact original prompts for manual smoke runs.
+
+There is no standalone dry-run flag in the MVP CLI. Request validation happens
+before browser startup, and invalid prompt or YAML inputs exit without opening
+Suno.
 
 ## Session Notes
 

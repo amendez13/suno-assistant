@@ -246,4 +246,4 @@ download audio files or store cookies/storage state in evidence.
 - [x] Expand the create-page smoke run into a richer Suno site adapter and selector module.
 - [x] Add initial prompt-to-song generation steps beyond the create-page visit.
 - [x] Add durable Suno-specific evidence extraction and artifact review beyond the minimal submit event.
-- [ ] Add headed smoke-run instructions using GSV observability.
+- [x] Add headed smoke-run instructions using GSV observability.

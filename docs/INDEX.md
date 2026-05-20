@@ -38,6 +38,10 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Verification steps
 - Troubleshooting
 
+**[MANUAL_SMOKE.md](MANUAL_SMOKE.md)**
+- Operator workflow for headed login bootstrap and bounded live smoke runs
+- Prompt/request examples, evidence review, artifact retention, and safety boundaries
+
 **[AI_SKILLS.md](AI_SKILLS.md)**
 - Canonical AI skills source tree
 - Dual deployment to Claude and Codex
@@ -130,6 +134,11 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 
 ## Operations
 
+**[MANUAL_SMOKE.md](MANUAL_SMOKE.md)**
+- Headed Suno login bootstrap
+- Bounded prompt-to-song smoke checklist
+- Evidence inspection and local artifact cleanup
+
 **[OBSERVABILITY.md](OBSERVABILITY.md)**
 - Health endpoint, logging, and Loki query guidance
 - systemd naming and session-artifact conventions
@@ -148,17 +157,18 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 
 ## Project Status
 
-**Current Phase:** Create-page smoke run
+**Current Phase:** MVP prompt-to-song workflow
 - Template instantiated
 - `gentle-site-visitor` dependency wired
 - Suno create-page visit plan wired
 - Suno auth/session bootstrap wired
 - Suno create-page selector and fixture-backed extractor layer wired
-
-**Next Phase:** Bounded prompt-to-song generation plan
-- Request-aware create-page form fill wired
-- Bounded submit and completion wait wired
+- Request-aware bounded generation plan wired
 - Generation evidence and review artifacts wired
+
+**Next Phase:** Live smoke and operations hardening
+- Run the headed manual smoke checklist with the operator's own account
+- Review artifact retention expectations after real runs
 
 **Future:** Operations hardening
 - Dependency upgrade and release pinning review
@@ -182,6 +192,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 |----------|---------|----------|
 | [README.md](../README.md) | Getting started, installation, usage | All users |
 | [SETUP.md](SETUP.md) | Environment configuration | All users |
+| [MANUAL_SMOKE.md](MANUAL_SMOKE.md) | Headed login, live smoke checks, artifact review | Operators, developers |
 | [AI_SKILLS.md](AI_SKILLS.md) | AI skill source, deploy, and starter-skill guide | Developers |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture and design | Developers |
 | [CI.md](CI.md) | CI/CD pipeline and development workflow | Developers |
