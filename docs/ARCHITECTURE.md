@@ -64,12 +64,14 @@ flowchart LR
 
 **Responsibilities**:
 - Load project configuration.
+- Validate operator song requests before browser startup.
 - Choose bounded Suno create-page workflows.
 - Construct GSV `VisitPlan` instances.
 - Emit Suno-specific generation evidence events.
 
 **Key Files**:
 - `suno_assistant/main.py`
+- `suno_assistant/requests.py`
 - `suno_assistant/visit.py`
 
 ### gentle-site-visitor Framework
@@ -89,10 +91,12 @@ observability mechanics.
 ## Data Flow
 
 1. Operator supplies config and run target.
-2. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
-3. Suno Assistant builds a GSV `VisitPlan`.
-4. GSV executes the plan through browser/session/pacing/observability layers.
-5. Suno Assistant receives generation evidence rows and run artifacts for review.
+2. Suno Assistant optionally loads a YAML request or quick prompt and validates
+   the bounded song request before browser startup.
+3. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
+4. Suno Assistant builds a request-aware GSV `VisitPlan`.
+5. GSV executes the plan through browser/session/pacing/observability layers.
+6. Suno Assistant receives generation evidence rows and run artifacts for review.
 
 ## Design Decisions
 
@@ -108,7 +112,6 @@ submodules, or subtree copies.
 - Pro: Framework upgrades are explicit and reviewable.
 - Pro: Suno-specific PRs do not mix with framework PRs.
 - Pro: CI can test the application boundary exactly as deployed.
-- Con: Private Git dependency access must be configured for CI.
 - Con: Production should pin a tag or commit SHA instead of tracking `main`.
 
 ### Decision 2: Keep Runs Bounded
@@ -122,6 +125,21 @@ rate-limit settings, and session artifacts.
 - Pro: Headed demos and early smoke runs stay comprehensible.
 - Pro: Run artifacts can be inspected before increasing scope.
 - Con: Broad coverage requires explicit operator configuration.
+
+### Decision 3: Validate Song Requests Before Browser Startup
+
+**Context**: The app will eventually submit requests that can consume Suno
+credits or quota.
+
+**Decision**: The CLI normalizes `--prompt` and `--request` inputs into a typed
+`SongRequest` before launching the browser.
+
+**Consequences**:
+- Pro: Invalid request files, empty prompts, broad counts, and unsupported
+  combinations fail without touching the live Suno session.
+- Pro: The visit-plan boundary can evolve toward generation steps without
+  coupling request parsing to selectors.
+- Con: New request fields need explicit parser and documentation updates.
 
 ## Performance Considerations
 

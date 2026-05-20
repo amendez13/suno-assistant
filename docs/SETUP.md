@@ -73,6 +73,12 @@ python -m suno_assistant.main --help
 # Or run the create-page smoke visit
 python -m suno_assistant.main
 
+# Or validate a quick song request before the create-page smoke visit
+python -m suno_assistant.main --prompt "A warm original synth pop song about planning a careful launch."
+
+# Or validate a structured song request before the create-page smoke visit
+python -m suno_assistant.main --request examples/song-request.yaml
+
 # Or keep a headed browser open for manual inspection
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 ```
@@ -115,6 +121,32 @@ Both configuration styles are included so a new project can choose the lighter-w
 - Use `.env` when deployment platforms, process managers, or local tooling already revolve around environment variables.
 - `python-dotenv` is included so projects can load a local `.env` file during development without exporting each variable manually.
 - It is reasonable to ship both examples and let the application define precedence between YAML and environment variables.
+
+## Song Request YAML
+
+Structured song requests are separate from runtime configuration and can be
+stored anywhere outside sensitive artifact directories. See
+`examples/song-request.yaml` for a safe example.
+
+Supported fields:
+
+```yaml
+prompt: "Required original-song creative brief."
+title: "Optional local title"
+style: "Optional genre, mood, instrumentation, or arrangement guidance"
+lyrics: "Optional user-provided lyrics"
+instrumental: false
+custom_mode: false
+count: 1
+tags:
+  - demo
+notes: "Optional local-only notes"
+```
+
+The CLI validates requests before starting the browser. Invalid request files,
+empty prompts, unknown fields, unsupported count values, lyrics on instrumental
+requests, or explicit requests to imitate a specific artist or voice return an
+error without launching a Suno browser session.
 
 ## Session Notes
 

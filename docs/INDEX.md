@@ -159,7 +159,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Headed smoke-run workflow
 
 **Future:** Operations hardening
-- Private CI dependency pinning
+- Dependency upgrade and release pinning review
 - Deployment target selection
 - Session artifact retention review
 

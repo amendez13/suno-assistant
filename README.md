@@ -66,6 +66,22 @@ cp config/config.example.yaml config/config.yaml
 python -m suno_assistant.main
 ```
 
+Run the create-page smoke path with a quick, validated song request:
+
+```bash
+python -m suno_assistant.main --prompt "A bright original indie pop song about finishing a hard project."
+```
+
+Or use a structured YAML request:
+
+```bash
+python -m suno_assistant.main --request examples/song-request.yaml
+```
+
+The current request-aware path validates the song request before browser startup
+and carries the normalized request into the visit-plan boundary. It does not yet
+fill Suno form fields or submit a generation request.
+
 To inspect the page manually in a visible browser and keep it open after the first navigation:
 
 ```bash
@@ -96,6 +112,27 @@ sites:
     auth:
       auth_marker_url: "https://suno.com/create"
 ```
+
+## Song Request Files
+
+Suno Assistant accepts YAML request files with the following fields:
+
+```yaml
+prompt: "A required original-song creative brief."
+title: "Optional local title"
+style: "Optional genre, mood, instrumentation, or arrangement guidance"
+lyrics: "Optional user-provided lyrics"
+instrumental: false
+custom_mode: false
+count: 1
+tags:
+  - demo
+notes: "Optional local-only notes"
+```
+
+Validation rejects empty prompts, unknown fields, non-positive or overly broad
+counts, lyrics on instrumental requests, and explicit requests to imitate a
+specific artist or voice. The initial hard cap is `4` generations per request.
 
 ## Project Structure
 

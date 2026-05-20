@@ -146,10 +146,12 @@ class TestProjectSummary:
             *,
             headed: bool = False,
             keep_open: bool = False,
+            song_request=None,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
             assert keep_open is False
+            assert song_request is None
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -176,10 +178,12 @@ class TestProjectSummary:
             *,
             headed: bool = False,
             keep_open: bool = False,
+            song_request=None,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
             assert keep_open is True
+            assert song_request is None
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -194,6 +198,123 @@ class TestProjectSummary:
 
         assert exit_code == 0
         assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_passes_prompt_song_request(self, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+        """The CLI should normalize a one-line prompt before running the visit."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_create_visit(
+            config_path: Path,
+            *,
+            headed: bool = False,
+            keep_open: bool = False,
+            song_request=None,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert headed is False
+            assert keep_open is False
+            assert song_request.prompt == "Make an original acoustic song about a quiet morning."
+            assert song_request.count == 1
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={},
+                extracted={},
+                step_results=[StepResult(name="navigate_create_page", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_create_visit", fake_run_create_visit)
+
+        exit_code = main_module.main(["--prompt", "Make an original acoustic song about a quiet morning."])
+
+        assert exit_code == 0
+        assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_passes_yaml_song_request(self, monkeypatch, capsys, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+        """The CLI should load structured song requests before running the visit."""
+        request_path = tmp_path / "request.yaml"
+        request_path.write_text(
+            "prompt: A cinematic original song about launching a satellite.\n"
+            "title: Orbital Morning\n"
+            "style: cinematic synth pop\n"
+            "count: 2\n"
+            "tags:\n"
+            "  - smoke\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_create_visit(
+            config_path: Path,
+            *,
+            headed: bool = False,
+            keep_open: bool = False,
+            song_request=None,
+        ) -> VisitResult:
+            del headed, keep_open
+            assert config_path == Path("config/config.yaml")
+            assert song_request.title == "Orbital Morning"
+            assert song_request.style == "cinematic synth pop"
+            assert song_request.count == 2
+            assert song_request.tags == ["smoke"]
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={},
+                extracted={},
+                step_results=[StepResult(name="navigate_create_page", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_create_visit", fake_run_create_visit)
+
+        exit_code = main_module.main(["--request", str(request_path)])
+
+        assert exit_code == 0
+        assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_rejects_invalid_prompt_before_browser_start(
+        self, monkeypatch, capsys
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Invalid prompt input should stop before the browser runtime is called."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_create_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--prompt", "   "])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "Invalid song request: prompt must not be empty" in captured.err
+
+    def test_main_rejects_missing_request_before_browser_start(
+        self, monkeypatch, capsys
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Missing request files should stop before the browser runtime is called."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_create_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--request", "missing.yaml"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "Invalid song request: Request file not found: missing.yaml" in captured.err
 
     def test_run_create_visit_uses_browser_runtime(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         """The smoke visit should build a visit context and finalize recording."""
@@ -223,7 +344,7 @@ class TestProjectSummary:
         monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
         monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
         monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
-        monkeypatch.setattr(main_module, "build_create_plan", lambda: "create-page-plan")
+        monkeypatch.setattr(main_module, "build_create_plan", lambda song_request=None: f"create-page-plan:{song_request}")
         monkeypatch.setattr(main_module, "keep_browser_open", lambda page: main_module.asyncio.sleep(0))
 
         result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml")))
@@ -234,7 +355,7 @@ class TestProjectSummary:
         assert "enable_har_for_session" in events
         assert "new_page" in events
         assert "save_session" in events
-        assert ("plan", "create-page-plan") in events
+        assert ("plan", "create-page-plan:None") in events
         assert ("recorder_finalize", "completed", None) in events
         assert "close" in events
 
@@ -269,7 +390,7 @@ class TestProjectSummary:
         monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
         monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
         monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
-        monkeypatch.setattr(main_module, "build_create_plan", lambda: "create-page-plan")
+        monkeypatch.setattr(main_module, "build_create_plan", lambda song_request=None: "create-page-plan")
         monkeypatch.setattr(main_module, "keep_browser_open", fake_keep_browser_open)
 
         result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml"), keep_open=True))
