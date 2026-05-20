@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import logging
 import random
+import sys
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -21,6 +22,7 @@ from gsv.visit import VisitContext, VisitResult, VisitRunner
 
 from .logging_config import configure_logging
 from .release_info import get_release_info
+from .requests import SongRequest, SongRequestError, load_song_request
 from .visit import build_plan as build_create_plan
 
 LOGGER = logging.getLogger(__name__)
@@ -75,8 +77,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Keep the headed browser open after the create-page visit until you close the window or interrupt the run.",
     )
+    request_group = parser.add_mutually_exclusive_group()
+    request_group.add_argument("--request", type=Path, help="Path to a YAML song request file.")
+    request_group.add_argument("--prompt", help="One-line original song prompt for a quick request.")
     parser.add_argument("--summary-only", action="store_true", help="Print the dependency summary and exit.")
     return parser.parse_args(argv)
+
+
+def resolve_song_request(args: argparse.Namespace) -> SongRequest | None:
+    """Resolve an optional song request from parsed CLI arguments."""
+    if args.request is not None:
+        return load_song_request(args.request)
+    if args.prompt is not None:
+        return SongRequest.from_prompt(args.prompt)
+    return None
 
 
 def load_runtime_config(config_path: Path, *, headed: bool = False) -> ResolvedRunConfig:
@@ -126,7 +140,13 @@ async def keep_browser_open(page: Any) -> None:
         await asyncio.sleep(0.5)
 
 
-async def run_create_visit(config_path: Path, *, headed: bool = False, keep_open: bool = False) -> VisitResult:
+async def run_create_visit(
+    config_path: Path,
+    *,
+    headed: bool = False,
+    keep_open: bool = False,
+    song_request: SongRequest | None = None,
+) -> VisitResult:
     """Run a single Suno create-page visit through the gsv runtime."""
     resolved = load_runtime_config(config_path, headed=headed)
     browser = BrowserManager(resolved.visitor, resolved.site, rng=random.Random())
@@ -148,7 +168,7 @@ async def run_create_visit(config_path: Path, *, headed: bool = False, keep_open
             rng=random.Random(),
             recorder=recorder,
         )
-        visit_result = await VisitRunner(visit_ctx).run(build_create_plan())
+        visit_result = await VisitRunner(visit_ctx).run(build_create_plan(song_request=song_request))
         if keep_open:
             await keep_browser_open(page)
         return visit_result
@@ -170,8 +190,16 @@ def main(argv: list[str] | None = None) -> int:
     print(dependency_summary())
     if args.summary_only:
         return 0
+    try:
+        song_request = resolve_song_request(args)
+    except SongRequestError as exc:
+        LOGGER.error("Invalid song request", extra={"event": "song_request_invalid", "error": str(exc)})
+        print(f"Invalid song request: {exc}", file=sys.stderr)
+        return 2
 
-    result = asyncio.run(run_create_visit(args.config, headed=args.headed, keep_open=args.keep_open))
+    result = asyncio.run(
+        run_create_visit(args.config, headed=args.headed, keep_open=args.keep_open, song_request=song_request)
+    )
     print(f"Run {result.outcome}: {describe_project().site_name}")
     return 0 if result.outcome == "completed" else 1
 

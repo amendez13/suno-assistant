@@ -6,12 +6,15 @@ from gsv.apps import register_app
 from gsv.visit import VisitContext, VisitPlan
 from gsv.visit.steps import Navigate
 
+from .requests import SongRequest
+
 SUNO_CREATE_URL = "https://suno.com/create"
 
 
-def build_plan(ctx: VisitContext | None = None) -> VisitPlan:
-    """Build the first bounded Suno smoke plan."""
+def build_plan(ctx: VisitContext | None = None, *, song_request: SongRequest | None = None) -> VisitPlan:
+    """Build the first bounded Suno plan."""
     del ctx
+    del song_request
     return VisitPlan(
         steps=[
             Navigate(
