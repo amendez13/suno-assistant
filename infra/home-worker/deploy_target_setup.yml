@@ -1,0 +1,10 @@
+---
+- name: Home-worker deployment target bootstrap skeleton
+  hosts: workers
+  become: true
+  tasks:
+    - name: Explain what this playbook should provision
+      ansible.builtin.debug:
+        msg:
+          - "Placeholder for worker runtime bootstrap and service installation."
+          - "Add package installs, app directories, systemd units, and SSH trust as needed."

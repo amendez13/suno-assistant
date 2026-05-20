@@ -1,0 +1,7 @@
+name: "suno-assistant-feature-design"
+description: "Use when designing a suno-assistant feature from a request, draft issue, references, PRs, screenshots, or code context, and the goal is an implementation-ready GitHub issue."
+codex:
+  interface:
+    display_name: "suno-assistant Feature Design"
+    short_description: Design suno-assistant features and GitHub issues
+    default_prompt: Use $suno-assistant-feature-design to turn a request into an implementation-ready suno-assistant GitHub issue.

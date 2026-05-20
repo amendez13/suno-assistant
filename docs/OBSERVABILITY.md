@@ -1,0 +1,231 @@
+# Observability
+
+This template ships a generic observability pattern that separates service health from run-level debugging.
+
+## Two Layers
+
+### Platform layer
+
+Use the platform layer for service-level visibility:
+
+`journald -> Promtail -> Loki -> Grafana`
+
+This layer answers questions such as:
+- Did the unit start?
+- Is the service failing repeatedly?
+- Are multiple services showing the same error pattern?
+
+### App layer
+
+Use the app layer for run- or task-level debugging:
+- structured JSONL logs
+- optional session artifact directories
+- manifest metadata for a specific run
+
+This layer answers questions such as:
+- What happened in this specific task?
+- Which phase failed?
+- Which structured payloads were emitted during the run?
+
+## When To Use Which Layer
+
+- Service state, startup failures, timer execution, or cross-service history: use the platform layer first.
+- One task, one session, one pipeline run, or one batch execution: use the app layer.
+- If you do not know whether the process ran at all: start with `systemctl` and `journalctl`, then drill into app-level artifacts if the unit did run.
+
+## Structured Logging Pattern
+
+The template includes `suno_assistant/logging_config.py` with:
+- human-readable stderr logging by default
+- optional JSONL file output for machine-readable run logs
+- `contextvars` correlation fields for `session_id`, `task_id`, and `phase`
+
+Recommended pattern:
+1. Call `configure_logging()` at startup.
+2. Set correlation fields once at the start of a task or session with `set_log_context(...)`.
+3. Attach structured payloads with `extra={...}`.
+4. Reset or replace the context when the task boundary changes.
+
+Example:
+
+```python
+import logging
+
+from suno_assistant.logging_config import configure_logging, set_log_context
+
+logger = logging.getLogger(__name__)
+
+configure_logging(jsonl_path="data/sessions/run-1/worker.jsonl")
+set_log_context(session_id="run-1", task_id="job-42", phase="fetch")
+logger.info("Task started", extra={"event": "task_started", "queue": "default"})
+```
+
+## Loki Label Conventions
+
+When shipping logs to a shared Loki stack, prefer a stable component label:
+
+```text
+component="suno-assistant"
+```
+
+That keeps queries predictable across projects:
+
+```logql
+{component="suno-assistant"}
+```
+
+## systemd Unit Naming
+
+Use unit names that match the component label and the job role:
+- `suno-assistant.service`
+- `suno-assistant-<job>.service`
+- `suno-assistant-<job>.timer`
+
+This keeps service names, Syslog identifiers, and Loki queries aligned.
+
+For long-running jobs, increase `TimeoutStopSec=` beyond the default so in-flight work has time to finalize cleanly before systemd escalates to `SIGKILL`.
+
+## Health Endpoint Pattern
+
+Projects with an HTTP surface should expose a basic liveness endpoint:
+
+### `GET /health`
+
+Recommended payload shape:
+
+```json
+{
+  "status": "ok",
+  "release": {
+    "tag": "v1.2.3",
+    "commit": "abc123456789",
+    "short_commit": "abc1234",
+    "source": "env"
+  }
+}
+```
+
+Use `suno_assistant/release_info.py` to populate the release metadata.
+
+### `GET /pipeline/health`
+
+For queue- or pipeline-driven projects, expose richer execution state:
+
+```json
+{
+  "status": "ok",
+  "queue_counts": {
+    "pending": 3,
+    "processing": 1,
+    "failed": 0,
+    "completed": 18
+  },
+  "running_jobs": 1,
+  "last_triggered_at": "2026-04-27T08:15:00Z",
+  "last_loop_error": null,
+  "stale_claim_reconciliation": {
+    "status": "ok",
+    "requeued": 0
+  }
+}
+```
+
+The purpose is to distinguish queue-empty from queue-blocked, blocked-by-running-work, and broken-loop states.
+
+## Operator Runbook
+
+- Did the unit run?
+  `journalctl -u suno-assistant.service -n 100 --no-pager -q`
+- What is the current unit state?
+  `systemctl status suno-assistant.service --no-pager`
+- Need cross-service search or a longer time window?
+  Use Loki or Grafana.
+- Need to inspect one specific run?
+  Use the app-layer JSONL log or session artifacts when the project adopts that pattern.
+
+## Verifying Loki Ingestion
+
+Start with journald:
+
+```bash
+journalctl -u suno-assistant.service -n 50 --no-pager -q
+```
+
+Then verify the stream is queryable in Loki:
+
+```bash
+curl -G "$LOKI_URL/loki/api/v1/query_range" \
+  --data-urlencode 'query={component="suno-assistant"}' \
+  --data-urlencode "limit=20"
+```
+
+## Useful LogQL Queries
+
+```logql
+{component="suno-assistant"}
+{component="suno-assistant"} |= "ERROR"
+{component="suno-assistant"} |~ "task.*completed|task.*failed"
+{component="suno-assistant"} |= "startup"
+```
+
+## Optional Session Artifact Pattern
+
+Projects with long-running tasks, workers, or batch jobs may store per-run artifacts under:
+
+```text
+data/sessions/<timestamp>_<task-id>/
+```
+
+Typical contents:
+- `manifest.json`
+- `worker.jsonl`
+- `trace.zip`
+- `network.har`
+- other tool-specific artifacts
+
+### Manifest Shape
+
+```json
+{
+  "session_id": "2026-04-27T081500Z_job-42",
+  "started_at": "2026-04-27T08:15:00Z",
+  "finished_at": "2026-04-27T08:20:30Z",
+  "duration_seconds": 330,
+  "outcome": "completed",
+  "task": {
+    "id": "job-42",
+    "kind": "sync"
+  },
+  "results": {
+    "processed": 18
+  },
+  "error": null
+}
+```
+
+### Lifecycle
+
+Use a `finally` block so cleanup and manifest writing still happen on failures:
+1. Initialize the session directory.
+2. Set log context.
+3. Run the task.
+4. Finalize artifacts and manifest.
+5. Detach the JSONL handler if one was created.
+
+### Retention
+
+Recommended knobs:
+- `retention_days`
+- `max_sessions`
+
+Run cleanup before starting a new session so the artifact store stays bounded.
+
+### Cleanup-On-Success Modes
+
+- `off`: never delete heavy artifacts automatically
+- `failures`: keep heavy artifacts only for failed or cancelled runs
+- `always`: always clean heavy artifacts after finalization
+
+### Optional Archive Sink
+
+Projects that need durable artifact retention can add a pluggable archive sink such as S3. This template documents the pattern only; it does not implement an archive backend.

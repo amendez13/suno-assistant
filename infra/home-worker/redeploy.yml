@@ -1,0 +1,13 @@
+---
+- name: Home-worker redeploy skeleton
+  hosts: workers
+  become: true
+  vars:
+    deploy_ref: "{{ deploy_ref | default('HEAD') }}"
+  tasks:
+    - name: Confirm redeploy inputs
+      ansible.builtin.debug:
+        msg:
+          - "Home-worker redeploy placeholder"
+          - "Requested ref: {{ deploy_ref }}"
+          - "Implement fetch/reset/service-restart steps for your runtime."

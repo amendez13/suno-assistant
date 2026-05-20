@@ -1,0 +1,17 @@
+[Unit]
+Description=suno-assistant <job> service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=suno-assistant
+Group=suno-assistant
+WorkingDirectory=/opt/suno-assistant
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/suno-assistant/venv/bin/python -m suno_assistant.main
+TimeoutStopSec=300
+SyslogIdentifier=suno-assistant
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,82 @@
+name: Claude Code Review
+
+on:
+  # Trigger on comment with "/claude-review" keyword
+  issue_comment:
+    types: [created]
+
+  # Manual trigger via GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
+
+  # Note: Automatic triggers on push (synchronize) have been disabled
+  # This prevents Claude from reviewing after each push to a PR
+  #
+  # To trigger a review:
+  #   1. Comment "/claude-review" on any PR
+  #   2. Or use the "Run workflow" button in the Actions tab
+
+jobs:
+  claude-review:
+    # Only allow amendez13 to trigger on comments with "/claude-review"
+    if: |
+      github.actor == 'amendez13' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/claude-review'))
+      )
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # Allows creating commits and branches
+      pull-requests: write # Allows creating and updating PRs
+      issues: write        # Allows creating and updating issues
+      id-token: write
+      actions: read        # Required for Claude to read CI results on PRs
+
+    steps:
+      - name: Get PR head ref
+        id: pr-ref
+        if: github.event.issue.pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.issue.number }}"
+          PR_DATA=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json headRefName)
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.headRefName')
+          echo "ref=$HEAD_REF" >> $GITHUB_OUTPUT
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.pr-ref.outputs.ref || github.ref }}
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+
+            Please review this pull request and provide feedback on:
+            - Code quality and best practices
+            - Potential bugs or issues
+            - Performance considerations
+            - Security concerns
+            - Test coverage
+
+            Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
+
+            Use `gh pr comment` with your Bash tool to leave your review as a comment on the PR.
+
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
+          #
+          # Allow Claude to create/update issues and PRs, plus review PRs
+          claude_args: '--allowed-tools "Bash(gh issue create:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh pr diff:*)"'

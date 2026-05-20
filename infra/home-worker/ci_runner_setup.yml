@@ -1,0 +1,52 @@
+---
+- name: Bootstrap self-hosted CI runner skeleton
+  hosts: ci_runners
+  become: true
+  vars:
+    github_actions_runner_version: "2.333.1"
+    github_actions_repo_url: "https://github.com/amendez13/suno-assistant"
+    github_actions_runner_user: ci-runner
+    github_actions_runner_group: ci-runner
+    github_actions_runner_root: /opt/github-actions-runner
+    github_actions_runner_labels:
+      - self-hosted
+      - linux
+    ci_runner_image: "ghcr.io/amendez13/suno-assistant-ci:latest"
+    ci_runner_pull_image: false
+
+  tasks:
+    - name: Explain intended runner contract
+      ansible.builtin.debug:
+        msg:
+          - "This is a provisioning skeleton for a Linux self-hosted CI runner."
+          - "Implement Docker installation, runner registration, and service wiring for your host OS."
+          - "Keep the runner labels aligned with .github/workflows/ci.yml and docs/CI_RUNNER.md."
+
+    - name: Placeholder | ensure runner group exists
+      ansible.builtin.group:
+        name: "{{ github_actions_runner_group }}"
+        state: present
+
+    - name: Placeholder | ensure runner user exists
+      ansible.builtin.user:
+        name: "{{ github_actions_runner_user }}"
+        group: "{{ github_actions_runner_group }}"
+        create_home: true
+        shell: /bin/bash
+
+    - name: Placeholder | create runner root
+      ansible.builtin.file:
+        path: "{{ github_actions_runner_root }}"
+        state: directory
+        owner: "{{ github_actions_runner_user }}"
+        group: "{{ github_actions_runner_group }}"
+        mode: "0755"
+
+    - name: Placeholder | next manual implementation tasks
+      ansible.builtin.debug:
+        msg:
+          - "TODO: install Docker Engine or another supported Linux container runtime."
+          - "TODO: download actions/runner {{ github_actions_runner_version }} for the host architecture."
+          - "TODO: register the runner against {{ github_actions_repo_url }} with labels {{ github_actions_runner_labels | join(',') }}."
+          - "TODO: create a systemd service so the runner survives reboots."
+          - "TODO: optionally pre-pull {{ ci_runner_image }} when ci_runner_pull_image=true."

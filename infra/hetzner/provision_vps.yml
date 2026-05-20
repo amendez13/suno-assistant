@@ -1,0 +1,10 @@
+---
+- name: Hetzner VPS provisioning skeleton
+  hosts: app
+  become: true
+  tasks:
+    - name: Explain what this playbook should provision
+      ansible.builtin.debug:
+        msg:
+          - "Placeholder for base OS hardening, package install, and runtime bootstrap."
+          - "Add firewall, users, directories, and application prerequisites for your VPS."

@@ -1,0 +1,7 @@
+name: "suno-assistant-feature-delivery"
+description: Use when delivering suno-assistant GitHub issues end to end through dedicated git worktree, tests, PR, CI, review, merge, and cleanup.
+codex:
+  interface:
+    display_name: "suno-assistant Feature Delivery"
+    short_description: Implement suno-assistant issues end to end in a worktree
+    default_prompt: Use $suno-assistant-feature-delivery to deliver a suno-assistant GitHub issue end to end.

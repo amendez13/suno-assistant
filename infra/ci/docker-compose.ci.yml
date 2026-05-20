@@ -1,0 +1,9 @@
+services:
+  ci:
+    build:
+      context: ../..
+      dockerfile: infra/ci/Dockerfile
+    volumes:
+      - ../../:/workspace
+    working_dir: /workspace
+    user: ci

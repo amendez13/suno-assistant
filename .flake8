@@ -1,0 +1,18 @@
+[flake8]
+max-line-length = 127
+exclude =
+    .git,
+    __pycache__,
+    venv,
+    .venv,
+    build,
+    dist,
+    *.egg-info
+max-complexity = 10
+ignore =
+    # Allow line breaks before binary operators (PEP 8 updated)
+    W503,
+    # Allow line breaks after binary operators
+    W504,
+per-file-ignores =
+    __init__.py:F401

@@ -1,0 +1,667 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "main"
+      - "develop"
+  pull_request:
+    branches:
+      - "main"
+      - "develop"
+  workflow_dispatch:
+    inputs:
+      runner_target:
+        description: Runner target for this manual CI run
+        required: false
+        default: "github_hosted"
+        type: choice
+        options:
+          - github_hosted
+          - self_hosted_linux
+          - self_hosted_linux_arm64
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  actions: write
+  contents: read
+  packages: read
+  pull-requests: read
+
+env:
+  DEFAULT_RUNNER: "github_hosted"
+
+jobs:
+  resolve-runner:
+    name: Resolve Runner Target
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      target: ${{ steps.pick.outputs.target }}
+      container_options: ${{ steps.pick.outputs.container_options }}
+      ci_image: ${{ steps.pick.outputs.ci_image }}
+      skip_full_ci: ${{ steps.classify.outputs.skip_full_ci }}
+      skip_reason: ${{ steps.classify.outputs.skip_reason }}
+    steps:
+      - id: pick
+        name: Select runs-on target
+        run: |
+          TARGET_INPUT="${{ github.event.inputs.runner_target }}"
+          if [ -n "$TARGET_INPUT" ]; then
+            TARGET="$TARGET_INPUT"
+          else
+            TARGET="${DEFAULT_RUNNER}"
+          fi
+
+          case "$TARGET" in
+            github_hosted)
+              echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+              echo 'target=github_hosted' >> "$GITHUB_OUTPUT"
+              echo 'container_options=' >> "$GITHUB_OUTPUT"
+              ;;
+            self_hosted_linux)
+              echo 'runner=["self-hosted","linux"]' >> "$GITHUB_OUTPUT"
+              echo 'target=self_hosted_linux' >> "$GITHUB_OUTPUT"
+              echo 'container_options=--user 1001:1001' >> "$GITHUB_OUTPUT"
+              ;;
+            self_hosted_linux_arm64)
+              echo 'runner=["self-hosted","linux","arm64"]' >> "$GITHUB_OUTPUT"
+              echo 'target=self_hosted_linux_arm64' >> "$GITHUB_OUTPUT"
+              echo 'container_options=--user 1001:1001 --platform linux/arm64' >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::warning::Unknown runner target '$TARGET'. Falling back to github_hosted."
+              echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+              echo 'target=github_hosted' >> "$GITHUB_OUTPUT"
+              echo 'container_options=' >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+          echo 'ci_image=ghcr.io/amendez13/suno-assistant-ci:latest' >> "$GITHUB_OUTPUT"
+          echo "Resolved runner target: $TARGET"
+
+      - id: classify
+        name: Classify CI execution mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SKIP_FULL_CI=false
+          SKIP_REASON=""
+          DOCS_ONLY=false
+          MERGE_COMMIT_MESSAGE="${{ github.event.head_commit.message }}"
+          ZERO_SHA="0000000000000000000000000000000000000000"
+          DOCS_ONLY_PATTERN='^(docs/|notes/|README\.md$|AGENTS\.md$|CLAUDE\.md$)'
+
+          BASE_SHA=""
+          HEAD_SHA=""
+          CHANGED_FILES=""
+
+          api_get() {
+            local api_url="$1"
+            curl -sSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -w '\n%{http_code}' \
+              "${api_url}" \
+              || true
+          }
+
+          collect_pr_files() {
+            local page=1
+            local all_files=""
+
+            while true; do
+              local payload
+              payload="$(api_get "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files?per_page=100&page=${page}")"
+              local http_status
+              http_status="$(echo "${payload}" | tail -n 1)"
+              local response
+              response="$(echo "${payload}" | sed '$d')"
+
+              if [ "${http_status}" != "200" ]; then
+                echo "::warning::PR files lookup returned HTTP ${http_status}; docs-only classifier disabled."
+                return 1
+              fi
+
+              local page_count
+              page_count="$(echo "${response}" | jq 'length')"
+              if [ "${page_count}" = "0" ]; then
+                break
+              fi
+
+              local page_files
+              page_files="$(echo "${response}" | jq -r '.[].filename')"
+              if [ -n "${page_files}" ]; then
+                all_files="${all_files}${all_files:+$'\n'}${page_files}"
+              fi
+
+              if [ "${page_count}" -lt 100 ]; then
+                break
+              fi
+
+              page=$((page + 1))
+            done
+
+            printf '%s' "${all_files}"
+          }
+
+          collect_push_files() {
+            local api_url=""
+
+            if [ "${BASE_SHA}" = "${ZERO_SHA}" ]; then
+              api_url="https://api.github.com/repos/${{ github.repository }}/commits/${HEAD_SHA}"
+            else
+              api_url="https://api.github.com/repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}"
+            fi
+
+            local payload
+            payload="$(api_get "${api_url}")"
+            local http_status
+            http_status="$(echo "${payload}" | tail -n 1)"
+            local response
+            response="$(echo "${payload}" | sed '$d')"
+
+            if [ "${http_status}" != "200" ]; then
+              echo "::warning::Changed-files lookup returned HTTP ${http_status}; docs-only classifier disabled."
+              return 1
+            fi
+
+            echo "${response}" | jq -r '.files[]?.filename'
+          }
+
+          case "${{ github.event_name }}" in
+            pull_request)
+              BASE_SHA="${{ github.event.pull_request.base.sha }}"
+              HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+              CHANGED_FILES="$(collect_pr_files || true)"
+              ;;
+            push)
+              BASE_SHA="${{ github.event.before }}"
+              HEAD_SHA="${{ github.sha }}"
+              CHANGED_FILES="$(collect_push_files || true)"
+              ;;
+          esac
+
+          if [ -n "${CHANGED_FILES}" ] && ! echo "${CHANGED_FILES}" | grep -Evq "${DOCS_ONLY_PATTERN}"; then
+            DOCS_ONLY=true
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            API_URL="https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls"
+            CURL_PAYLOAD="$(
+              curl -sSL \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -w '\n%{http_code}' \
+                "${API_URL}" \
+                || true
+            )"
+            HTTP_STATUS="$(echo "${CURL_PAYLOAD}" | tail -n 1)"
+            RESPONSE="$(echo "${CURL_PAYLOAD}" | sed '$d')"
+
+            if [ "${HTTP_STATUS}" = "200" ] && [ -n "${RESPONSE}" ] && [ "$(echo "${RESPONSE}" | jq -r 'type')" = "array" ]; then
+              MERGED_TO_MAIN_COUNT="$(
+                echo "${RESPONSE}" | jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length'
+              )"
+              if [ "${MERGED_TO_MAIN_COUNT}" -gt 0 ]; then
+                SKIP_FULL_CI=true
+                SKIP_REASON="merged_pr_push_main"
+              fi
+            elif [ "${HTTP_STATUS}" != "200" ]; then
+              echo "::warning::Commit-to-PR lookup returned HTTP ${HTTP_STATUS}; fallback heuristics may apply."
+            fi
+
+            if [ "${SKIP_FULL_CI}" != "true" ] && echo "${MERGE_COMMIT_MESSAGE}" | grep -Eq '^Merge pull request #[0-9]+'; then
+              SKIP_FULL_CI=true
+              SKIP_REASON="merge_commit_message_pattern"
+            fi
+          fi
+
+          if [ "${SKIP_FULL_CI}" != "true" ] && [ "${DOCS_ONLY}" = "true" ]; then
+            SKIP_FULL_CI=true
+            SKIP_REASON="docs_only_changes"
+          fi
+
+          echo "skip_full_ci=${SKIP_FULL_CI}" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=${SKIP_REASON}" >> "$GITHUB_OUTPUT"
+          echo "skip_full_ci=${SKIP_FULL_CI} skip_reason=${SKIP_REASON:-none}"
+
+  lint:
+    name: Lint and Code Quality
+    needs: [resolve-runner]
+    if: needs.resolve-runner.outputs.skip_full_ci != 'true'
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runner) }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Configure private dependency SSH
+        env:
+          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
+        run: |
+          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
+            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
+          chmod 600 ~/.ssh/gsv_dependency_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          {
+            echo "Host github.com"
+            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
+            echo "  IdentitiesOnly yes"
+          } >> ~/.ssh/config
+
+      - name: Create pinned lint tool venv
+        run: |
+          python3 -m venv .lint-venv
+          . .lint-venv/bin/activate
+          pip install --disable-pip-version-check \
+            black==26.3.1 \
+            isort==5.13.2 \
+            flake8==7.0.0 \
+            mypy==1.8.0 \
+            "types-PyYAML>=6.0"
+          pip install -r requirements.txt
+
+      - name: Check code formatting with Black
+        run: .lint-venv/bin/black --check --diff suno_assistant/
+
+      - name: Check import sorting with isort
+        run: .lint-venv/bin/isort --check-only --diff suno_assistant/
+
+      - name: Lint with flake8
+        run: |
+          .lint-venv/bin/flake8 suno_assistant/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          .lint-venv/bin/flake8 suno_assistant/ --count --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Type checking with mypy
+        run: .lint-venv/bin/mypy suno_assistant/ --ignore-missing-imports --strict --explicit-package-bases
+
+      - name: Cancel workflow after lint failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HTTP_STATUS="$(
+            curl -sSL -o /tmp/workflow-cancel-response.json -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+          )"
+          if [ "${HTTP_STATUS}" != "202" ] && [ "${HTTP_STATUS}" != "409" ]; then
+            cat /tmp/workflow-cancel-response.json
+            exit 1
+          fi
+          echo "Requested workflow cancellation after lint failure (HTTP ${HTTP_STATUS})."
+
+  coverage:
+    name: Coverage Check
+    needs: [resolve-runner]
+    if: needs.resolve-runner.outputs.skip_full_ci != 'true'
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runner) }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Configure private dependency SSH
+        env:
+          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
+        run: |
+          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
+            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
+          chmod 600 ~/.ssh/gsv_dependency_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          {
+            echo "Host github.com"
+            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
+            echo "  IdentitiesOnly yes"
+          } >> ~/.ssh/config
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        run: python -m pytest tests/ -v --cov=suno_assistant --cov-report=term-missing --cov-report=html --cov-report=xml --cov-fail-under=95
+
+      - name: Upload coverage HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: repo/htmlcov/
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: ./repo/coverage.xml
+          fail_ci_if_error: false
+        continue-on-error: true
+
+      - name: Cancel workflow after coverage failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HTTP_STATUS="$(
+            curl -sSL -o /tmp/workflow-cancel-response.json -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+          )"
+          if [ "${HTTP_STATUS}" != "202" ] && [ "${HTTP_STATUS}" != "409" ]; then
+            cat /tmp/workflow-cancel-response.json
+            exit 1
+          fi
+          echo "Requested workflow cancellation after coverage failure (HTTP ${HTTP_STATUS})."
+
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    needs: [resolve-runner, coverage]
+    if: needs.resolve-runner.outputs.skip_full_ci != 'true'
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runner) }}
+    defaults:
+      run:
+        working-directory: repo
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Configure private dependency SSH
+        env:
+          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
+        run: |
+          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
+            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
+          chmod 600 ~/.ssh/gsv_dependency_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          {
+            echo "Host github.com"
+            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
+            echo "  IdentitiesOnly yes"
+          } >> ~/.ssh/config
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v
+
+      - name: Cancel workflow after test failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HTTP_STATUS="$(
+            curl -sSL -o /tmp/workflow-cancel-response.json -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+          )"
+          if [ "${HTTP_STATUS}" != "202" ] && [ "${HTTP_STATUS}" != "409" ]; then
+            cat /tmp/workflow-cancel-response.json
+            exit 1
+          fi
+          echo "Requested workflow cancellation after test failure (HTTP ${HTTP_STATUS})."
+
+  security:
+    name: Security Checks
+    needs: [resolve-runner]
+    if: needs.resolve-runner.outputs.skip_full_ci != 'true'
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runner) }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Configure private dependency SSH
+        env:
+          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
+        run: |
+          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
+            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
+          chmod 600 ~/.ssh/gsv_dependency_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          {
+            echo "Host github.com"
+            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
+            echo "  IdentitiesOnly yes"
+          } >> ~/.ssh/config
+
+      - name: Install security tools
+        run: python -m pip install bandit==1.7.6 pip-audit==2.7.3
+
+      - name: Run bandit security checks
+        run: bandit -r suno_assistant/ -ll
+
+      - name: Check for known dependency vulnerabilities
+        run: pip-audit --requirement requirements.txt
+
+      - name: Cancel workflow after security failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HTTP_STATUS="$(
+            curl -sSL -o /tmp/workflow-cancel-response.json -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+          )"
+          if [ "${HTTP_STATUS}" != "202" ] && [ "${HTTP_STATUS}" != "409" ]; then
+            cat /tmp/workflow-cancel-response.json
+            exit 1
+          fi
+          echo "Requested workflow cancellation after security failure (HTTP ${HTTP_STATUS})."
+
+  validate-config:
+    name: Validate Configuration
+    needs: [resolve-runner]
+    if: needs.resolve-runner.outputs.skip_full_ci != 'true'
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runner) }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install YAML dependency
+        run: python -m pip install PyYAML
+
+      - name: Validate YAML configuration files
+        run: |
+          python -c "
+          import sys
+          import yaml
+
+          try:
+              with open('config/config.example.yaml', 'r', encoding='utf-8') as f:
+                  yaml.safe_load(f)
+              print('config.example.yaml is valid')
+          except Exception as exc:
+              print(f'config.example.yaml is invalid: {exc}')
+              sys.exit(1)
+          "
+
+      - name: Check Python syntax
+        run: find suno_assistant -name '*.py' -exec python -m py_compile {} +
+
+      - name: Cancel workflow after validation failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HTTP_STATUS="$(
+            curl -sSL -o /tmp/workflow-cancel-response.json -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+          )"
+          if [ "${HTTP_STATUS}" != "202" ] && [ "${HTTP_STATUS}" != "409" ]; then
+            cat /tmp/workflow-cancel-response.json
+            exit 1
+          fi
+          echo "Requested workflow cancellation after validation failure (HTTP ${HTTP_STATUS})."
+
+  build-status:
+    name: CI Status Check
+    needs: [resolve-runner, lint, coverage, test, security, validate-config]
+    if: always()
+    runs-on: ${{ fromJSON(needs.resolve-runner.outputs.runner) }}
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Check build status
+        run: |
+          if [ "${{ needs.resolve-runner.outputs.skip_full_ci }}" = "true" ]; then
+            echo "CI intentionally skipped: ${{ needs.resolve-runner.outputs.skip_reason }}"
+            exit 0
+          fi
+
+          if [ "${{ needs.resolve-runner.result }}" != "success" ]; then
+            echo "Runner resolution failed"
+            exit 1
+          fi
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "Linting failed"
+            exit 1
+          fi
+          if [ "${{ needs.coverage.result }}" != "success" ]; then
+            echo "Coverage check failed"
+            exit 1
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "Tests failed"
+            exit 1
+          fi
+          if [ "${{ needs.security.result }}" != "success" ]; then
+            echo "Security checks failed"
+            exit 1
+          fi
+          if [ "${{ needs.validate-config.result }}" != "success" ]; then
+            echo "Configuration validation failed"
+            exit 1
+          fi
+          echo "All CI checks passed."
+
+      - name: Cancel workflow after status failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HTTP_STATUS="$(
+            curl -sSL -o /tmp/workflow-cancel-response.json -w '%{http_code}' \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+          )"
+          if [ "${HTTP_STATUS}" != "202" ] && [ "${HTTP_STATUS}" != "409" ]; then
+            cat /tmp/workflow-cancel-response.json
+            exit 1
+          fi
+          echo "Requested workflow cancellation after aggregate failure (HTTP ${HTTP_STATUS})."

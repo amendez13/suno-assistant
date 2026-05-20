@@ -1,0 +1,32 @@
+# suno-assistant Configuration
+# Copy this file to config.yaml and fill in your values:
+#   cp config/config.example.yaml config/config.yaml
+#
+# WARNING: config.yaml contains sensitive data and should NOT be committed to git
+
+visitor:
+  headless: true
+  locale: en-US
+  timezone_id: UTC
+  page_timeout_seconds: 30
+  pacing:
+    profile: production
+    rate_limit_per_hour: 90
+  observability:
+    mode: failures
+    trace: true
+    har: true
+    video: true
+    sessions_dir: data/sessions
+    retention_days: 14
+    max_sessions: 100
+
+sites:
+  suno:
+    app_module: suno_assistant.visit
+    allowed_host_globs:
+      - https://suno.com/**
+    rate_limit:
+      requests_per_hour: 90
+    auth:
+      auth_marker_url: https://suno.com/create

@@ -1,0 +1,523 @@
+name: Release Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref or commit to deploy
+        required: false
+        default: "{{MAIN_BRANCH}}"
+        type: string
+      release_tag:
+        description: Release tag to create or verify
+        required: true
+        type: string
+      target:
+        description: Deployment target
+        required: true
+        default: hetzner
+        type: choice
+        options:
+          - hetzner
+          - home_worker
+      smoke_level:
+        description: Post-deploy smoke-test depth
+        required: true
+        default: basic
+        type: choice
+        options:
+          - basic
+          - extended
+  release:
+    types: [published]
+
+concurrency:
+  group: release-global
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  deploy-release:
+    name: Deploy Release
+    if: >-
+      github.event_name != 'release' ||
+      !contains(github.event.release.body || '', '<!-- {{PROJECT_NAME}}-release-origin: workflow_dispatch -->')
+    runs-on:
+      - self-hosted
+      - linux
+    env:
+      WORKFLOW_DISPATCH_MARKER: "<!-- {{PROJECT_NAME}}-release-origin: workflow_dispatch -->"
+      DEPLOYMENT_STATUS_START: "<!-- deployment-status:start -->"
+      DEPLOYMENT_STATUS_END: "<!-- deployment-status:end -->"
+    steps:
+      - name: Repair runner workspace before checkout
+        env:
+          WORKSPACE_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+
+          allowed_pattern='(^|/)_work/[^/]+/[^/]+$'
+          if [[ ! "${WORKSPACE_ROOT}" =~ ${allowed_pattern} ]]; then
+            echo "::error::Refusing to clean unexpected workspace path: ${WORKSPACE_ROOT}"
+            exit 1
+          fi
+
+          repo_dir="${WORKSPACE_ROOT}/repo"
+          mkdir -p "${repo_dir}"
+          find "${repo_dir}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: repo
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
+
+      - name: Authorize release actor
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const actor = context.actor;
+            const owner = context.repo.owner;
+            const organizationLogin = context.payload.organization?.login ?? "";
+
+            if (!organizationLogin) {
+              if (actor !== owner) {
+                core.setFailed(
+                  `Only repository owner ${owner} may run the release workflow for user-owned repositories.`,
+                );
+              }
+              return;
+            }
+
+            const response = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: actor,
+            });
+
+            if (response.data.permission !== "admin") {
+              core.setFailed(
+                `Actor ${actor} must have admin repository permission to run the release workflow for organization-owned repositories.`,
+              );
+            }
+
+      - name: Resolve release context
+        id: context
+        working-directory: repo
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          INPUT_REF: ${{ github.event.inputs.ref }}
+          INPUT_RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          INPUT_TARGET: ${{ github.event.inputs.target }}
+          INPUT_SMOKE_LEVEL: ${{ github.event.inputs.smoke_level }}
+        run: python3 scripts/github/resolve_release_context.py
+
+      - name: Create or verify release tag
+        working-directory: repo
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+          DEPLOY_REF: ${{ steps.context.outputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags origin
+
+          expected_commit="$(git rev-parse "${DEPLOY_REF}")"
+          if git rev-parse --verify "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            tagged_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+            if [[ "${tagged_commit}" != "${expected_commit}" ]]; then
+              echo "::error::Tag ${RELEASE_TAG} already exists at ${tagged_commit}, expected ${expected_commit}."
+              exit 1
+            fi
+            echo "Tag ${RELEASE_TAG} already points to ${expected_commit}."
+          else
+            git tag "${RELEASE_TAG}" "${expected_commit}"
+            git push origin "refs/tags/${RELEASE_TAG}"
+            echo "Created and pushed tag ${RELEASE_TAG} -> ${expected_commit}."
+          fi
+
+      - name: Upsert GitHub release with in-progress deployment status
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+          DEPLOY_REF: ${{ steps.context.outputs.deploy_ref }}
+          RELEASE_TRIGGER: ${{ steps.context.outputs.trigger }}
+          DEPLOY_TARGET: ${{ steps.context.outputs.target }}
+          SMOKE_LEVEL: ${{ steps.context.outputs.smoke_level }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_DISPATCH_MARKER: ${{ env.WORKFLOW_DISPATCH_MARKER }}
+          DEPLOYMENT_STATUS_START: ${{ env.DEPLOYMENT_STATUS_START }}
+          DEPLOYMENT_STATUS_END: ${{ env.DEPLOYMENT_STATUS_END }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const deployRef = process.env.DEPLOY_REF;
+            const trigger = process.env.RELEASE_TRIGGER;
+            const target = process.env.DEPLOY_TARGET;
+            const smokeLevel = process.env.SMOKE_LEVEL;
+            const runUrl = process.env.RUN_URL;
+            const startMarker = process.env.DEPLOYMENT_STATUS_START;
+            const endMarker = process.env.DEPLOYMENT_STATUS_END;
+            const workflowDispatchMarker = process.env.WORKFLOW_DISPATCH_MARKER;
+
+            function stripStatusSection(body) {
+              if (!body) {
+                return "";
+              }
+              const pattern = new RegExp(
+                `${startMarker}[\\s\\S]*?${endMarker}\\n?`,
+                "g",
+              );
+              return body.replace(pattern, "").trim();
+            }
+
+            function ensureOriginMarker(body) {
+              if (trigger !== "workflow_dispatch") {
+                return body;
+              }
+              return body.includes(workflowDispatchMarker)
+                ? body
+                : [body, workflowDispatchMarker].filter(Boolean).join("\n\n");
+            }
+
+            const statusSection = [
+              startMarker,
+              "## Deployment Status",
+              "",
+              "- State: in_progress",
+              `- Target: ${target}`,
+              `- Smoke level: ${smokeLevel}`,
+              `- Deploy ref: \`${deployRef}\``,
+              `- Workflow run: ${runUrl}`,
+              endMarker,
+            ].join("\n");
+
+            let release;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              release = response.data;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            const baseBody = ensureOriginMarker(stripStatusSection(release?.body ?? ""));
+            const finalBody = [baseBody, statusSection].filter(Boolean).join("\n\n");
+
+            if (release) {
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                tag_name: tag,
+                target_commitish: deployRef,
+                name: release.name || tag,
+                body: finalBody,
+              });
+            } else {
+              await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                target_commitish: deployRef,
+                name: tag,
+                body: finalBody,
+              });
+            }
+
+      - name: Pre-flight required secrets check
+        working-directory: repo
+        env:
+          DEPLOY_TARGET: ${{ steps.context.outputs.target }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HETZNER_INVENTORY: ${{ secrets.HETZNER_INVENTORY }}
+          HETZNER_SECRETS_YAML: ${{ secrets.HETZNER_SECRETS_YAML }}
+          HETZNER_BASE_URL: ${{ secrets.HETZNER_BASE_URL }}
+          HOME_WORKER_INVENTORY: ${{ secrets.HOME_WORKER_INVENTORY }}
+          HOME_WORKER_SECRETS_YAML: ${{ secrets.HOME_WORKER_SECRETS_YAML }}
+          HOME_WORKER_BASE_URL: ${{ secrets.HOME_WORKER_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          required_common=(
+            DEPLOY_SSH_PRIVATE_KEY
+            DEPLOY_KNOWN_HOSTS
+          )
+
+          case "${DEPLOY_TARGET}" in
+            hetzner)
+              required_target=(
+                HETZNER_INVENTORY
+                HETZNER_SECRETS_YAML
+                HETZNER_BASE_URL
+              )
+              ;;
+            home_worker)
+              required_target=(
+                HOME_WORKER_INVENTORY
+                HOME_WORKER_SECRETS_YAML
+                HOME_WORKER_BASE_URL
+              )
+              ;;
+            *)
+              echo "::error::Unsupported deployment target: ${DEPLOY_TARGET}"
+              exit 1
+              ;;
+          esac
+
+          missing=()
+          for var_name in "${required_common[@]}" "${required_target[@]}"; do
+            if [[ -z "${!var_name:-}" ]]; then
+              missing+=("${var_name}")
+            fi
+          done
+
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            printf '::error::Missing required GitHub secrets for target %s: %s\n' \
+              "${DEPLOY_TARGET}" "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Ensure ansible-core is available
+        run: |
+          set -euo pipefail
+
+          if command -v ansible >/dev/null 2>&1 && command -v ansible-playbook >/dev/null 2>&1; then
+            ansible --version
+            exit 0
+          fi
+
+          if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+            if sudo apt-get update && sudo apt-get install -y ansible-core; then
+              ansible --version
+              exit 0
+            fi
+          fi
+
+          python3 -m pip install --user ansible-core
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Configure SSH material
+        env:
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${DEPLOY_SSH_PRIVATE_KEY}" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Materialize inventory and secrets
+        id: materialize
+        working-directory: repo
+        env:
+          DEPLOY_TARGET: ${{ steps.context.outputs.target }}
+          HETZNER_INVENTORY: ${{ secrets.HETZNER_INVENTORY }}
+          HETZNER_SECRETS_YAML: ${{ secrets.HETZNER_SECRETS_YAML }}
+          HETZNER_BASE_URL: ${{ secrets.HETZNER_BASE_URL }}
+          HOME_WORKER_INVENTORY: ${{ secrets.HOME_WORKER_INVENTORY }}
+          HOME_WORKER_SECRETS_YAML: ${{ secrets.HOME_WORKER_SECRETS_YAML }}
+          HOME_WORKER_BASE_URL: ${{ secrets.HOME_WORKER_BASE_URL }}
+        run: |
+          set -euo pipefail
+
+          case "${DEPLOY_TARGET}" in
+            hetzner)
+              inventory_path="infra/hetzner/inventory.local.ini"
+              secrets_path="infra/hetzner/secrets.yml"
+              inventory_contents="${HETZNER_INVENTORY}"
+              secrets_contents="${HETZNER_SECRETS_YAML}"
+              base_url="${HETZNER_BASE_URL}"
+              ;;
+            home_worker)
+              inventory_path="infra/home-worker/inventory.local.ini"
+              secrets_path="infra/home-worker/secrets.yml"
+              inventory_contents="${HOME_WORKER_INVENTORY}"
+              secrets_contents="${HOME_WORKER_SECRETS_YAML}"
+              base_url="${HOME_WORKER_BASE_URL}"
+              ;;
+            *)
+              echo "::error::Unsupported deployment target: ${DEPLOY_TARGET}"
+              exit 1
+              ;;
+          esac
+
+          printf '%s\n' "${inventory_contents}" > "${inventory_path}"
+          printf '%s\n' "${secrets_contents}" > "${secrets_path}"
+
+          echo "inventory_path=${inventory_path}" >> "$GITHUB_OUTPUT"
+          echo "secrets_path=${secrets_path}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${base_url}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate materialized secrets YAML
+        working-directory: repo
+        env:
+          SECRETS_PATH: ${{ steps.materialize.outputs.secrets_path }}
+        run: |
+          set -euo pipefail
+          ansible localhost -i 'localhost,' -c local \
+            -m debug \
+            -a 'msg=validated secrets file' \
+            -e "@${SECRETS_PATH}"
+
+      - name: Deploy target
+        working-directory: repo
+        env:
+          DEPLOY_TARGET: ${{ steps.context.outputs.target }}
+          DEPLOY_REF: ${{ steps.context.outputs.deploy_ref }}
+          INVENTORY_PATH: ${{ steps.materialize.outputs.inventory_path }}
+          SECRETS_PATH: ${{ steps.materialize.outputs.secrets_path }}
+        run: |
+          set -euo pipefail
+          ./scripts/redeploy.sh \
+            --target "${DEPLOY_TARGET}" \
+            --deploy-ref "${DEPLOY_REF}" \
+            --inventory "${INVENTORY_PATH}" \
+            --secrets-file "${SECRETS_PATH}"
+
+      - name: Smoke check deployment
+        working-directory: repo
+        env:
+          BASE_URL: ${{ steps.materialize.outputs.base_url }}
+          SMOKE_LEVEL: ${{ steps.context.outputs.smoke_level }}
+          EXPECTED_REF: ${{ steps.context.outputs.deploy_ref }}
+        run: |
+          set -euo pipefail
+          ./scripts/release_smoke_check.sh \
+            --base-url "${BASE_URL}" \
+            --smoke-level "${SMOKE_LEVEL}" \
+            --expected-ref "${EXPECTED_REF}"
+
+      - name: Update GitHub release status after successful deploy
+        if: success()
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+          DEPLOY_TARGET: ${{ steps.context.outputs.target }}
+          SMOKE_LEVEL: ${{ steps.context.outputs.smoke_level }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOYMENT_STATUS_START: ${{ env.DEPLOYMENT_STATUS_START }}
+          DEPLOYMENT_STATUS_END: ${{ env.DEPLOYMENT_STATUS_END }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const target = process.env.DEPLOY_TARGET;
+            const smokeLevel = process.env.SMOKE_LEVEL;
+            const runUrl = process.env.RUN_URL;
+            const startMarker = process.env.DEPLOYMENT_STATUS_START;
+            const endMarker = process.env.DEPLOYMENT_STATUS_END;
+            const completedAt = new Date().toISOString();
+
+            let release;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              release = response.data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.warning(`No GitHub Release found for tag ${tag}; skipping success status update.`);
+                return;
+              }
+              throw error;
+            }
+            const baseBody = (release.body ?? "").replace(
+              new RegExp(`${startMarker}[\\s\\S]*?${endMarker}\\n?`, "g"),
+              "",
+            ).trim();
+            const statusSection = [
+              startMarker,
+              "## Deployment Status",
+              "",
+              "- State: success",
+              `- Target: ${target}`,
+              `- Smoke level: ${smokeLevel}`,
+              `- Completed at: ${completedAt}`,
+              `- Workflow run: ${runUrl}`,
+              endMarker,
+            ].join("\n");
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body: [baseBody, statusSection].filter(Boolean).join("\n\n"),
+            });
+
+      - name: Update GitHub release status after failed deploy
+        if: failure()
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
+          DEPLOY_TARGET: ${{ steps.context.outputs.target }}
+          SMOKE_LEVEL: ${{ steps.context.outputs.smoke_level }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPLOYMENT_STATUS_START: ${{ env.DEPLOYMENT_STATUS_START }}
+          DEPLOYMENT_STATUS_END: ${{ env.DEPLOYMENT_STATUS_END }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+            const target = process.env.DEPLOY_TARGET;
+            const smokeLevel = process.env.SMOKE_LEVEL;
+            const runUrl = process.env.RUN_URL;
+            const startMarker = process.env.DEPLOYMENT_STATUS_START;
+            const endMarker = process.env.DEPLOYMENT_STATUS_END;
+            const failedAt = new Date().toISOString();
+
+            let release;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              release = response.data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.warning(`No GitHub Release found for tag ${tag}; skipping failure status update.`);
+                return;
+              }
+              throw error;
+            }
+            const baseBody = (release.body ?? "").replace(
+              new RegExp(`${startMarker}[\\s\\S]*?${endMarker}\\n?`, "g"),
+              "",
+            ).trim();
+            const statusSection = [
+              startMarker,
+              "## Deployment Status",
+              "",
+              "- State: failure",
+              `- Target: ${target}`,
+              `- Smoke level: ${smokeLevel}`,
+              `- Failed at: ${failedAt}`,
+              `- Workflow run: ${runUrl}`,
+              endMarker,
+            ].join("\n");
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              body: [baseBody, statusSection].filter(Boolean).join("\n\n"),
+            });

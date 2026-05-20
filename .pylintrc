@@ -1,0 +1,25 @@
+[MASTER]
+ignore=venv,.venv,build,dist
+ignore-patterns=test_.*?\.py
+
+[MESSAGES CONTROL]
+disable=
+    C0111,  # missing-docstring
+    C0103,  # invalid-name
+    R0903,  # too-few-public-methods
+    R0913,  # too-many-arguments
+    W0212,  # protected-access
+
+[FORMAT]
+max-line-length=127
+indent-string='    '
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,logger
+
+[DESIGN]
+max-args=7
+max-locals=15
+max-returns=6
+max-branches=12
+max-statements=50

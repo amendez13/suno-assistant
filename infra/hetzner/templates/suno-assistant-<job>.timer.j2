@@ -1,0 +1,10 @@
+[Unit]
+Description=suno-assistant <job> schedule
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=suno-assistant-<job>.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,74 @@
+[tool.black]
+line-length = 127
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 127
+skip_gitignore = true
+skip = [".venv", "venv", "build", "dist"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = [
+    "--verbose",
+    "--strict-markers",
+    "--disable-warnings",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    'venv',
+    '.venv',
+    'build',
+    'dist',
+]
+
+[tool.coverage.run]
+source = ["suno_assistant"]
+omit = [
+    "*/tests/*",
+    "*/venv/*",
+    "*/.venv/*",
+    # Add only narrow, explained exceptions here when coverage would not provide
+    # useful signal, such as interactive CLI entry points or provider-specific
+    # implementations that are impractical to exercise in unit tests.
+]
+
+[tool.coverage.report]
+# Note: fail_under is NOT set here - it's only enforced in the dedicated
+# coverage CI job via --cov-fail-under=95 to keep it non-voting
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",  # Type-only branches are never executed at runtime.
+    # Whitelisted patterns - exclude only patterns that are structurally useful
+    # but not meaningful coverage targets.
+    "def main\\(\\):",  # CLI entry points are often thin wrappers around tested logic.
+    "@abstractmethod",  # Abstract contracts define interfaces, not executable behavior.
+]

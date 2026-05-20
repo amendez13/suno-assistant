@@ -1,0 +1,10 @@
+# Core dependencies
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Framework dependency.
+# Local development may also install ../gentle-site-visitor in editable mode.
+# For CI/private GitHub usage, configure SSH access for this repository dependency.
+gentle-site-visitor @ git+ssh://git@github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1
+
+# Add your project dependencies below

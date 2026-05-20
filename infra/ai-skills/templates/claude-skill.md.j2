@@ -1,0 +1,6 @@
+---
+name: {{ item.manifest.name | to_json }}
+description: {{ item.manifest.description | to_json }}
+---
+
+{{ lookup('ansible.builtin.file', item.source_dir ~ '/instructions.md') | trim }}

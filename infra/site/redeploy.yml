@@ -1,0 +1,15 @@
+---
+- name: Site redeploy skeleton
+  hosts: app
+  become: true
+  vars:
+    deploy_ref: "{{ deploy_ref | default('HEAD') }}"
+    deploy_target: "{{ deploy_target | default('hetzner') }}"
+  tasks:
+    - name: Confirm redeploy inputs
+      ansible.builtin.debug:
+        msg:
+          - "Site redeploy placeholder"
+          - "Target: {{ deploy_target }}"
+          - "Requested ref: {{ deploy_ref }}"
+          - "Implement checkout, dependency install, migration, and service-restart steps."

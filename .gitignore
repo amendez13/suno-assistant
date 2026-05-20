@@ -1,0 +1,72 @@
+# Config files with sensitive data
+config/config.yaml
+.mcp.json
+
+# Session-notes local configuration
+notes/.notes-config.yaml
+
+# macOS system files
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Local browser/session artifacts
+data/
+
+# Test coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# Security scanning cache
+.pip-audit-cache/
+
+# Deployment inventories and secrets
+infra/hetzner/inventory.local.ini
+infra/hetzner/secrets.yml
+infra/home-worker/inventory.local.ini
+infra/home-worker/secrets.yml
+
+# Temporary files
+temp/
+tmp/
+
+# Code review files (local only)
+.code-review-*.md

@@ -1,0 +1,7 @@
+name: "suno-assistant-example-skill"
+description: Use when you need a minimal copyable scaffold for a new suno-assistant Claude/Codex skill.
+codex:
+  interface:
+    display_name: "suno-assistant Example Skill"
+    short_description: Minimal suno-assistant skill scaffold
+    default_prompt: Use $suno-assistant-example-skill as a starting point for a new suno-assistant skill.

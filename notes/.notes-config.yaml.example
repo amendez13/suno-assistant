@@ -1,0 +1,11 @@
+# Optional configuration for the session-notes skill.
+# Copy this file to notes/.notes-config.yaml to enable the
+# secondary summary-log workflow for your local environment.
+
+secondary_log:
+  enabled: false
+  target_path_template: "/path/to/other/repo/notes/YYYY/MM/YYYY-MM-summary.md"
+  target_repo_path: "/path/to/other/repo"
+  target_branch: main
+  audience: "stakeholder"
+  commit_message_prefix: "docs(notes):"

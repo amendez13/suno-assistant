@@ -1,0 +1,128 @@
+---
+- name: Deploy canonical AI skills to Codex and Claude
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir | dirname | dirname }}"
+    canonical_skills_dir: "{{ repo_root }}/ai-skills"
+    codex_skills_dir: "{{ lookup('ansible.builtin.env', 'CREATE') }}/.codex/skills"
+    claude_skills_dir: "{{ lookup('ansible.builtin.env', 'CREATE') }}/.claude/skills"
+    template_dir: "{{ repo_root }}/infra/ai-skills/templates"
+    resource_dirs:
+      - references
+      - scripts
+      - assets
+
+  tasks:
+    - name: Discover canonical skill manifests
+      ansible.builtin.find:
+        paths: "{{ canonical_skills_dir }}"
+        patterns: skill.yaml
+        file_type: file
+        recurse: true
+      register: discovered_skill_manifests
+
+    - name: Collect canonical skill manifest paths
+      ansible.builtin.set_fact:
+        skill_manifest_paths: "{{ discovered_skill_manifests.files | map(attribute='path') | sort }}"
+
+    - name: Fail when no canonical skills are defined
+      ansible.builtin.assert:
+        that:
+          - skill_manifest_paths | length > 0
+        fail_msg: "No canonical skills found under {{ canonical_skills_dir }}."
+
+    - name: Load canonical skill manifests
+      ansible.builtin.set_fact:
+        canonical_skills: >-
+          {{
+            (canonical_skills | default([]))
+            + [ {
+                  'source_dir': item | dirname,
+                  'manifest': (lookup('ansible.builtin.file', item) | from_yaml)
+                } ]
+          }}
+      loop: "{{ skill_manifest_paths }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    - name: Ensure target skill roots exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ codex_skills_dir }}"
+        - "{{ claude_skills_dir }}"
+
+    - name: Record available canonical resource directories
+      ansible.builtin.stat:
+        path: "{{ item.0.source_dir }}/{{ item.1 }}"
+      loop: "{{ canonical_skills | product(resource_dirs) | list }}"
+      register: canonical_resource_dirs
+      loop_control:
+        label: "{{ item.0.manifest.name }}/{{ item.1 }}"
+
+    - name: Ensure Codex skill directories exist
+      ansible.builtin.file:
+        path: "{{ codex_skills_dir }}/{{ item.manifest.name }}/agents"
+        state: directory
+        mode: "0755"
+      loop: "{{ canonical_skills }}"
+      loop_control:
+        label: "{{ item.manifest.name }}"
+
+    - name: Render Codex SKILL.md files
+      ansible.builtin.template:
+        src: "{{ template_dir }}/codex-skill.md.j2"
+        dest: "{{ codex_skills_dir }}/{{ item.manifest.name }}/SKILL.md"
+        mode: "0644"
+      loop: "{{ canonical_skills }}"
+      loop_control:
+        label: "{{ item.manifest.name }}"
+
+    - name: Render Codex openai.yaml files
+      ansible.builtin.template:
+        src: "{{ template_dir }}/codex-openai.yaml.j2"
+        dest: "{{ codex_skills_dir }}/{{ item.manifest.name }}/agents/openai.yaml"
+        mode: "0644"
+      loop: "{{ canonical_skills }}"
+      loop_control:
+        label: "{{ item.manifest.name }}"
+
+    - name: Sync Codex resource directories
+      ansible.builtin.copy:
+        src: "{{ item.item.0.source_dir }}/{{ item.item.1 }}/"
+        dest: "{{ codex_skills_dir }}/{{ item.item.0.manifest.name }}/{{ item.item.1 }}/"
+      loop: "{{ canonical_resource_dirs.results }}"
+      when: item.stat.exists and item.stat.isdir
+      loop_control:
+        label: "{{ item.item.0.manifest.name }}/{{ item.item.1 }}"
+
+    - name: Ensure Claude skill directories exist
+      ansible.builtin.file:
+        path: "{{ claude_skills_dir }}/{{ item.manifest.name }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ canonical_skills }}"
+      loop_control:
+        label: "{{ item.manifest.name }}"
+
+    - name: Render Claude skill.md files
+      ansible.builtin.template:
+        src: "{{ template_dir }}/claude-skill.md.j2"
+        dest: "{{ claude_skills_dir }}/{{ item.manifest.name }}/skill.md"
+        mode: "0644"
+      loop: "{{ canonical_skills }}"
+      loop_control:
+        label: "{{ item.manifest.name }}"
+
+    - name: Sync Claude resource directories
+      ansible.builtin.copy:
+        src: "{{ item.item.0.source_dir }}/{{ item.item.1 }}/"
+        dest: "{{ claude_skills_dir }}/{{ item.item.0.manifest.name }}/{{ item.item.1 }}/"
+      loop: "{{ canonical_resource_dirs.results }}"
+      when: item.stat.exists and item.stat.isdir
+      loop_control:
+        label: "{{ item.item.0.manifest.name }}/{{ item.item.1 }}"

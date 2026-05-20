@@ -1,0 +1,19 @@
+[Unit]
+Description=suno-assistant application service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=suno-assistant
+Group=suno-assistant
+WorkingDirectory=/opt/suno-assistant
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/suno-assistant/venv/bin/python -m suno_assistant.main
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+SyslogIdentifier=suno-assistant
+
+[Install]
+WantedBy=multi-user.target

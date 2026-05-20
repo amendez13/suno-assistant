@@ -1,0 +1,7 @@
+name: "suno-assistant-session-notes"
+description: Use when creating or updating suno-assistant daily session notes. Optionally update a secondary summary log when the user explicitly asks for it.
+codex:
+  interface:
+    display_name: "suno-assistant Session Notes"
+    short_description: Update suno-assistant session notes
+    default_prompt: Use $suno-assistant-session-notes to update today's suno-assistant session notes.
