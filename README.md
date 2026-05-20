@@ -79,8 +79,12 @@ python -m suno_assistant.main --request examples/song-request.yaml
 ```
 
 The current request-aware path validates the song request before browser startup
-and carries the normalized request into the visit-plan boundary. It does not yet
-fill Suno form fields or submit a generation request.
+and runs the bounded generation plan after the saved Suno session is verified.
+The MVP generation path fills supported fields, submits once, waits within a
+bounded timeout for visible results or known blocked states, and records a
+minimal submit event in the active GSV evidence sink. It does not download audio
+files or bypass Suno quotas, moderation, CAPTCHA, MFA, or other platform
+controls.
 
 To inspect the page manually in a visible browser and keep it open after the first navigation:
 

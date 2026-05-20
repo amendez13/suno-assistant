@@ -25,8 +25,14 @@ class TestSunoVisitPlan:
 
         plan = visit_module.build_plan(song_request=request)
 
-        assert len(plan.steps) == 1
-        assert plan.steps[0].name == "navigate_create_page"
+        assert [step.name for step in plan.steps] == [
+            "navigate_create_page",
+            "verify_create_page_ready",
+            "fill_suno_request",
+            "submit_generation",
+            "wait_for_generation_result",
+        ]
+        assert plan.outcome_classifier is visit_module.classify_generation_outcome
 
     def test_visit_module_registers_suno_app(self) -> None:
         """Importing the module should register the Suno plan factory."""
