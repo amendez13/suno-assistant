@@ -88,6 +88,38 @@ class FakeVisitRunner:
         return self.result
 
 
+class FakeSession:
+    """Fake GSV session wrapper for auth orchestration tests."""
+
+    authenticated: bool = True
+    login_authenticated: bool = True
+    events: list[object]
+    last_instance: "FakeSession | None" = None
+
+    def __init__(self, browser, adapter, config, rng=None) -> None:  # type: ignore[no-untyped-def]
+        del rng
+        self.browser = browser
+        self.adapter = adapter
+        self.config = config
+        self.is_authenticated = False
+        self.events.append(("session_init", adapter))
+        FakeSession.last_instance = self
+
+    async def start(self) -> bool:
+        self.events.append("session_start")
+        self.is_authenticated = self.authenticated
+        if self.authenticated:
+            await self.browser.start()
+        return self.authenticated
+
+    async def login(self) -> bool:
+        self.events.append("session_login")
+        self.is_authenticated = self.login_authenticated
+        if self.login_authenticated:
+            await self.browser.start()
+        return self.login_authenticated
+
+
 class TestProjectSummary:
     """Tests for the project identity helpers."""
 
@@ -146,11 +178,13 @@ class TestProjectSummary:
             *,
             headed: bool = False,
             keep_open: bool = False,
+            login: bool = False,
             song_request=None,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
             assert keep_open is False
+            assert login is False
             assert song_request is None
             return VisitResult(
                 outcome="completed",
@@ -178,11 +212,13 @@ class TestProjectSummary:
             *,
             headed: bool = False,
             keep_open: bool = False,
+            login: bool = False,
             song_request=None,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
             assert keep_open is True
+            assert login is False
             assert song_request is None
             return VisitResult(
                 outcome="completed",
@@ -210,11 +246,13 @@ class TestProjectSummary:
             *,
             headed: bool = False,
             keep_open: bool = False,
+            login: bool = False,
             song_request=None,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
             assert keep_open is False
+            assert login is False
             assert song_request.prompt == "Make an original acoustic song about a quiet morning."
             assert song_request.count == 1
             return VisitResult(
@@ -253,10 +291,12 @@ class TestProjectSummary:
             *,
             headed: bool = False,
             keep_open: bool = False,
+            login: bool = False,
             song_request=None,
         ) -> VisitResult:
             del headed, keep_open
             assert config_path == Path("config/config.yaml")
+            assert login is False
             assert song_request.title == "Orbital Morning"
             assert song_request.style == "cinematic synth pop"
             assert song_request.count == 2
@@ -272,6 +312,58 @@ class TestProjectSummary:
         monkeypatch.setattr(main_module, "run_create_visit", fake_run_create_visit)
 
         exit_code = main_module.main(["--request", str(request_path)])
+
+        assert exit_code == 0
+        assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_requires_headed_login_bootstrap(self, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+        """Manual login bootstrap should not start a headless browser."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_create_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--login"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "use --headed --login" in captured.err
+
+    def test_main_passes_login_bootstrap_flag(self, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+        """The CLI should pass through the headed login bootstrap flag."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_create_visit(
+            config_path: Path,
+            *,
+            headed: bool = False,
+            keep_open: bool = False,
+            login: bool = False,
+            song_request=None,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert headed is True
+            assert keep_open is False
+            assert login is True
+            assert song_request is None
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={"auth_bootstrap_completed": 1},
+                extracted={},
+                step_results=[StepResult(name="suno_login_bootstrap", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_create_visit", fake_run_create_visit)
+
+        exit_code = main_module.main(["--headed", "--login"])
 
         assert exit_code == 0
         assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
@@ -329,6 +421,9 @@ class TestProjectSummary:
         events = browser.events
         FakeVisitRunner.result = fake_result
         FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        FakeSession.login_authenticated = True
 
         monkeypatch.setattr(
             main_module,
@@ -341,6 +436,8 @@ class TestProjectSummary:
             ),
         )
         monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
         monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
         monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
         monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
@@ -350,12 +447,88 @@ class TestProjectSummary:
         result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml")))
 
         assert result is fake_result
+        assert "session_start" in events
         assert "start" in events
         assert "start_tracing" in events
         assert "enable_har_for_session" in events
         assert "new_page" in events
         assert "save_session" in events
         assert ("plan", "create-page-plan:None") in events
+        assert ("recorder_finalize", "completed", None) in events
+        assert "close" in events
+
+    def test_run_create_visit_blocks_when_auth_required(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Unauthenticated sessions should stop before the visit plan runs."""
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeSession.events = events
+        FakeSession.authenticated = False
+        FakeSession.login_authenticated = True
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(
+            main_module,
+            "VisitRunner",
+            lambda ctx: (_ for _ in ()).throw(AssertionError("visit plan should not run")),
+        )
+
+        result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml")))
+
+        assert result.outcome == "blocked"
+        assert result.counters == {"auth_required": 1}
+        assert "session_start" in events
+        assert "start" not in events
+        assert "save_session" not in events
+        assert ("recorder_finalize", "blocked", result.error) in events
+        assert "close" in events
+
+    def test_run_create_visit_login_bootstrap_uses_session_login(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The login path should use GSV Session.login and skip the visit plan."""
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeSession.events = events
+        FakeSession.authenticated = False
+        FakeSession.login_authenticated = True
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(
+            main_module,
+            "VisitRunner",
+            lambda ctx: (_ for _ in ()).throw(AssertionError("visit plan should not run")),
+        )
+
+        result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml"), login=True))
+
+        assert result.outcome == "completed"
+        assert result.counters == {"auth_bootstrap_completed": 1}
+        assert "session_login" in events
+        assert "save_session" in events
         assert ("recorder_finalize", "completed", None) in events
         assert "close" in events
 
@@ -372,6 +545,9 @@ class TestProjectSummary:
         events = browser.events
         FakeVisitRunner.result = fake_result
         FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        FakeSession.login_authenticated = True
 
         async def fake_keep_browser_open(page: str) -> None:
             events.append(("keep_open", page))
@@ -387,6 +563,8 @@ class TestProjectSummary:
             ),
         )
         monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
         monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
         monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
         monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)

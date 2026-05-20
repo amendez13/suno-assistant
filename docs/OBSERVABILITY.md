@@ -143,6 +143,24 @@ The purpose is to distinguish queue-empty from queue-blocked, blocked-by-running
 - Need to inspect one specific run?
   Use the app-layer JSONL log or session artifacts when the project adopts that pattern.
 
+## Suno Auth Outcomes
+
+Suno Assistant verifies the saved browser session before running create-page
+workflows. Missing or expired auth returns a blocked run result with:
+
+- outcome: `blocked`
+- counter: `auth_required=1`
+- step: `verify_suno_auth`
+
+The operator action is to rerun the headed login bootstrap:
+
+```bash
+python -m suno_assistant.main --config config/config.yaml --headed --login
+```
+
+The storage state at `data/browser/suno/state.json` is sensitive local data. Do
+not commit it, copy it into issue threads, or include it in PR artifacts.
+
 ## Verifying Loki Ingestion
 
 Start with journald:

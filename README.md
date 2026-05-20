@@ -88,7 +88,20 @@ To inspect the page manually in a visible browser and keep it open after the fir
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 ```
 
-Browser storage state is persisted locally between launches under `data/browser/suno/state.json`, so cookie consent and other anonymous session state can carry across runs.
+Bootstrap your own Suno account session in a headed browser before running
+headless smoke or request-aware flows:
+
+```bash
+python -m suno_assistant.main --config config/config.yaml --headed --login
+```
+
+Complete Suno login, MFA, CAPTCHA, or other manual verification yourself in the
+browser. Suno Assistant does not automate credentials or bypass platform
+controls. Browser storage state is persisted locally between launches under
+`data/browser/suno/state.json`, so authenticated state, cookie consent, and
+other session state can carry across runs. If a later run cannot reach
+`https://suno.com/create` as an authenticated page, it exits with a blocked auth
+result before running any generation plan.
 
 The sample config also supports the framework CLI directly:
 
@@ -112,6 +125,10 @@ sites:
     auth:
       auth_marker_url: "https://suno.com/create"
 ```
+
+`auth_marker_url` is the authenticated create-page marker used by the GSV
+session layer. If Suno redirects that URL to a sign-in or verification page, run
+the headed login bootstrap again.
 
 ## Song Request Files
 

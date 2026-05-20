@@ -65,11 +65,14 @@ flowchart LR
 **Responsibilities**:
 - Load project configuration.
 - Validate operator song requests before browser startup.
+- Build the Suno auth adapter and verify the operator's saved session before
+  running create-page workflows.
 - Choose bounded Suno create-page workflows.
 - Construct GSV `VisitPlan` instances.
 - Emit Suno-specific generation evidence events.
 
 **Key Files**:
+- `suno_assistant/auth.py`
 - `suno_assistant/main.py`
 - `suno_assistant/requests.py`
 - `suno_assistant/visit.py`
@@ -93,10 +96,14 @@ observability mechanics.
 1. Operator supplies config and run target.
 2. Suno Assistant optionally loads a YAML request or quick prompt and validates
    the bounded song request before browser startup.
-3. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
-4. Suno Assistant builds a request-aware GSV `VisitPlan`.
-5. GSV executes the plan through browser/session/pacing/observability layers.
-6. Suno Assistant receives generation evidence rows and run artifacts for review.
+3. GSV `Session` restores local Suno browser storage and verifies that the
+   authenticated create page is reachable.
+4. If auth is missing or expired, Suno Assistant returns a blocked auth result
+   before building or executing any generation plan.
+5. Suno Assistant resolves a bounded Suno create workflow from operator instructions.
+6. Suno Assistant builds a request-aware GSV `VisitPlan`.
+7. GSV executes the plan through browser/session/pacing/observability layers.
+8. Suno Assistant receives generation evidence rows and run artifacts for review.
 
 ## Design Decisions
 
@@ -140,6 +147,22 @@ credits or quota.
 - Pro: The visit-plan boundary can evolve toward generation steps without
   coupling request parsing to selectors.
 - Con: New request fields need explicit parser and documentation updates.
+
+### Decision 4: Use Manual Headed Session Bootstrap
+
+**Context**: Suno may require third-party auth, MFA, CAPTCHA, or other
+verification flows that should not be automated.
+
+**Decision**: Use GSV's `Session` layer with a Suno auth adapter. The CLI
+supports `--headed --login` for operator-completed login and verifies saved
+storage state before any create-page workflow.
+
+**Consequences**:
+- Pro: The app uses the framework session boundary instead of parallel auth code.
+- Pro: Headless runs fail with a clear blocked auth result when the saved
+  session is missing or expired.
+- Pro: Manual verification remains operator-controlled.
+- Con: The operator must refresh local storage state when Suno expires the session.
 
 ## Performance Considerations
 

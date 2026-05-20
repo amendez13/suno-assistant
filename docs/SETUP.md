@@ -81,9 +81,14 @@ python -m suno_assistant.main --request examples/song-request.yaml
 
 # Or keep a headed browser open for manual inspection
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
+
+# Or bootstrap your own Suno login session in a headed browser
+python -m suno_assistant.main --config config/config.yaml --headed --login
 ```
 
-The browser storage state is saved locally under `data/browser/suno/state.json` after each run, so non-authenticated session state can be reused on the next launch.
+The browser storage state is saved locally under `data/browser/suno/state.json`
+after authenticated runs, so login state, cookie consent, and other local
+session state can be reused on the next launch.
 
 ## Configuration
 
@@ -103,6 +108,35 @@ sites:
     auth:
       auth_marker_url: https://suno.com/create
 ```
+
+`auth_marker_url` is the authenticated marker checked before any create-page
+workflow runs. If Suno redirects that URL to login, auth, verification, or a
+third-party provider, the run returns an auth-required blocked result before
+building a generation plan.
+
+### Suno Login Bootstrap
+
+Run the login bootstrap when setting up the project on a new machine or when
+Suno expires the saved browser state:
+
+```bash
+python -m suno_assistant.main --config config/config.yaml --headed --login
+```
+
+Complete the login, MFA, CAPTCHA, or other manual verification in the visible
+browser. Suno Assistant does not type credentials, solve challenges, or bypass
+platform controls. A successful bootstrap persists local storage state under
+`data/browser/suno/state.json`.
+
+Headless login bootstrap is intentionally rejected:
+
+```bash
+python -m suno_assistant.main --login
+# Invalid login request: use --headed --login for manual Suno login bootstrap.
+```
+
+For normal runs, missing or expired auth returns a blocked result and tells the
+operator to rerun the headed login bootstrap.
 
 ### Environment Variables
 
