@@ -87,12 +87,15 @@ def make_ctx(page: FakePage) -> FakeContext:
 def test_verify_create_page_ready_blocks_known_platform_state() -> None:
     """Known blocked page states should stop before filling or submitting."""
     ctx = make_ctx(FakePage(["quota_unavailable.html"]))
+    request = SongRequest.from_prompt("An original song about a blocked state.")
 
-    result = asyncio.run(VerifyCreatePageReady().execute(ctx))
+    result = asyncio.run(VerifyCreatePageReady(request).execute(ctx))
 
     assert result.outcome == "fail"
     assert result.error == "blocked:quota_unavailable"
-    assert ctx.counters == {"blocked_states_detected": 1}
+    assert ctx.counters == {"suno.blocked_states_detected": 1}
+    assert ctx.sink.events[0][0] == "generation_blocked"
+    assert ctx.sink.events[0][1]["reason"] == "quota_unavailable"
     assert classify_generation_outcome([result]) == "blocked"
 
 
@@ -114,7 +117,10 @@ def test_fill_suno_request_fills_prompt_and_required_lyrics() -> None:
     result = asyncio.run(FillSunoRequest(request).execute(ctx))
 
     assert result.outcome == "ok"
-    assert ctx.counters == {"generations_requested": 1}
+    assert ctx.counters == {"suno.generations_requested": 1, "suno.requests_loaded": 1}
+    assert ctx.sink.events[0][0] == "request_loaded"
+    assert ctx.sink.events[0][1]["prompt"] == "An original song about careful launches."
+    assert ctx.sink.events[0][1]["request_id"]
     assert ctx.page.fills == [
         (PROMPT_INPUT_SELECTORS.selectors[0], "An original song about careful launches."),
         (LYRICS_INPUT_SELECTORS.selectors[0], "We launch when the sky is clear"),
@@ -135,44 +141,56 @@ def test_fill_suno_request_requires_prompt_selector() -> None:
 def test_submit_generation_clicks_create_button_and_records_event() -> None:
     """Submitting should click one create control and emit a traceable event."""
     ctx = make_ctx(FakePage(["create_ready.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about submitting once.")
 
-    result = asyncio.run(SubmitGeneration().execute(ctx))
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
 
     assert result.outcome == "ok"
-    assert ctx.counters == {"requests_submitted": 1}
+    assert ctx.counters == {"suno.requests_submitted": 1}
     assert ctx.page.clicks == [CREATE_BUTTON_SELECTORS.selectors[0]]
-    assert ctx.sink.events == [("generation_submitted", {"attempt": 1})]
+    assert ctx.sink.events[0][0] == "generation_submitted"
+    assert ctx.sink.events[0][1]["attempt"] == 1
+    assert ctx.sink.events[0][1]["request_id"]
 
 
 def test_wait_for_generation_result_detects_completed_results() -> None:
     """The wait step should finish when result cards become visible."""
     ctx = make_ctx(FakePage(["generation_in_progress.html", "generation_completed.html"]))
+    request = SongRequest.from_prompt("An original song about finished output.")
 
-    result = asyncio.run(WaitForGenerationResult(timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
 
     assert result.outcome == "ok"
-    assert ctx.counters == {"generations_detected": 2}
+    assert ctx.counters == {"suno.generations_detected": 2}
     assert len(ctx.extracted["generation_results"]) == 2
+    assert ctx.sink.events[0][0] == "generation_completed"
+    assert ctx.sink.events[0][1]["result_count"] == 2
     assert classify_generation_outcome([result]) == "completed"
 
 
 def test_wait_for_generation_result_classifies_prompt_rejection_as_blocked() -> None:
     """Prompt rejection should produce blocked, not generic failed, outcome."""
     ctx = make_ctx(FakePage(["policy_rejected.html"]))
+    request = SongRequest.from_prompt("An original song that the UI rejects.")
 
-    result = asyncio.run(WaitForGenerationResult(timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
 
     assert result.outcome == "fail"
     assert result.error == "blocked:policy_rejected"
+    assert ctx.counters == {"suno.blocked_states_detected": 1, "suno.policy_blocks_detected": 1}
+    assert ctx.sink.events[0][0] == "generation_blocked"
     assert classify_generation_outcome([result]) == "blocked"
 
 
 def test_wait_for_generation_result_times_out() -> None:
     """Bounded waiting should fail instead of looping indefinitely."""
     ctx = make_ctx(FakePage(["create_ready.html"]))
+    request = SongRequest.from_prompt("An original song that times out.")
 
-    result = asyncio.run(WaitForGenerationResult(timeout_seconds=0.1, poll_interval_seconds=0).execute(ctx))
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=0.1, poll_interval_seconds=0).execute(ctx))
 
     assert result.outcome == "fail"
     assert result.error == "Timed out waiting for generation result"
+    assert ctx.sink.events[0][0] == "generation_failed"
+    assert ctx.sink.events[0][1]["phase"] == "wait_for_generation_result"
     assert classify_generation_outcome([result]) == "failed"

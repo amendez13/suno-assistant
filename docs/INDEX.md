@@ -158,7 +158,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 **Next Phase:** Bounded prompt-to-song generation plan
 - Request-aware create-page form fill wired
 - Bounded submit and completion wait wired
-- Generation evidence and review artifacts
+- Generation evidence and review artifacts wired
 
 **Future:** Operations hardening
 - Dependency upgrade and release pinning review

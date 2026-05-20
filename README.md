@@ -82,9 +82,9 @@ The current request-aware path validates the song request before browser startup
 and runs the bounded generation plan after the saved Suno session is verified.
 The MVP generation path fills supported fields, submits once, waits within a
 bounded timeout for visible results or known blocked states, and records a
-minimal submit event in the active GSV evidence sink. It does not download audio
-files or bypass Suno quotas, moderation, CAPTCHA, MFA, or other platform
-controls.
+Suno-specific evidence events in the active GSV evidence sink. It does not
+download audio files or bypass Suno quotas, moderation, CAPTCHA, MFA, or other
+platform controls.
 
 To inspect the page manually in a visible browser and keep it open after the first navigation:
 
@@ -112,6 +112,18 @@ The sample config also supports the framework CLI directly:
 ```bash
 gsv --config config/config.yaml run suno --once
 ```
+
+When observability is enabled, request-aware runs write reviewable evidence to
+the active session bundle:
+
+```text
+data/sessions/suno/<session-id>/evidence.jsonl
+```
+
+Events include `request_loaded`, `generation_submitted`,
+`generation_completed`, `generation_blocked`, and `generation_failed`. Evidence
+contains the explicit prompt and visible result metadata, so treat session
+artifacts as sensitive local files.
 
 ## Configuration
 
