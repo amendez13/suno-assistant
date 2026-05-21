@@ -43,7 +43,11 @@ validated Suno Assistant request file, then run the project create workflow.
    ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$SESSION_DIR/video.webm"
    ffmpeg -y -ss 00:01:10 -i "$SESSION_DIR/video.webm" -frames:v 1 /tmp/suno-check.png
    ```
-8. Report what was submitted, visible results, and any blocked/failed states.
+8. When the request belongs to a Suno Buddy project workspace, save the versioned
+   request YAML under that project's `requests/` folder and add or update an
+   `outputs/` note with the session path, evidence/video paths, visible song
+   links, and the user's feedback or next-change decision.
+9. Report what was submitted, visible results, and any blocked/failed states.
 
 ## Request File Practice
 
