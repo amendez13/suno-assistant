@@ -1,0 +1,63 @@
+prompt: "An original slower uplifting piano-soul song about a young woman who sells lots of clothing, accessories, and little treasures on Vinted, turning her room into a joyful little marketplace. The song should feel relaxed, inspiring, emotionally grounded, and optimistic, with a slower tempo around 74 BPM, spacious drums, bluesy piano movement, soulful phrasing, and a warm mature chorus that feels hopeful without sounding teen-pop."
+advanced_mode: true
+title: "Closet Full of Sunshine"
+lyrics: |
+  She opens the curtains, the morning runs in
+  Shoes on the carpet and a dress on a pin
+  Camera clicks, she laughs at the light
+  Turning yesterday into somebody's Friday night
+
+  A jacket gets a story, a scarf gets a name
+  A message says I love it and she grins all the same
+  Tape on the box, little note tucked inside
+  She's sending out sparks with every parcel ride
+
+  She's got a closet full of sunshine
+  A hallway full of dreams
+  Every little listing is a door to somewhere new
+  She lets the good things travel
+  She makes the old things gleam
+  And the whole world feels brighter when the sale comes through
+
+  Coins in a jar and a song in her chest
+  She learns what she's worth when she gives it her best
+  One more photo, one more friendly reply
+  She can build a little future from the things that pass by
+
+  A jumper finds a dancer, a handbag finds a train
+  A summer dress is ready to be loved out in the rain
+  She waves from her window as the postman goes
+  And every goodbye is a bloom that grows
+
+  She's got a closet full of sunshine
+  A hallway full of dreams
+  Every little listing is a door to somewhere new
+  She lets the good things travel
+  She makes the old things gleam
+  And the whole world feels brighter when the sale comes through
+
+  Step by step, she knows she can
+  Turn a quiet idea into a bigger plan
+  Bright pink labels and a brave little heart
+  This is where the next good thing starts
+
+  She's got a closet full of sunshine
+  A hallway full of dreams
+  Every little listing is a door to somewhere new
+  She lets the good things travel
+  She makes the old things gleam
+  And the whole world feels brighter when the sale comes through
+style: "mature soulful female alto vocal, smoky warm tone, adult contemporary piano-soul, relaxed 74 BPM tempo, bluesy piano chords, restrained vibrato, expressive phrasing, spacious acoustic drums, warm upright bass, subtle organ, gentle backing harmonies, hopeful chorus, tasteful strings"
+exclude_styles: "artist imitation, named-artist voice imitation, teen pop, bubblegum pop, girlish vocal, childish vocal, hyperpop, fast tempo, frantic drums, dance beat, slow dirge, rock opera, synthwave, heavy metal, trap"
+vocal_gender: female
+style_mode: manual
+weirdness: 70
+style_influence: 92
+instrumental: false
+count: 1
+tags:
+  - demo
+  - vinted
+  - mature-vocal
+  - slower
+notes: "Example advanced request for a slower mature-vocal Vinted seller song; avoids specific artist or copyrighted-song imitation."
