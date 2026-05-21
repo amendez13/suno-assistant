@@ -114,11 +114,13 @@ observability mechanics.
    disabled controls, or missing prompt controls are surfaced as explicit states.
 7. When a request is present, Suno Assistant fills supported create-page fields
    and submits one create/generate action.
-8. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
-9. Suno Assistant builds a request-aware GSV `VisitPlan`.
-10. GSV executes the plan through browser/session/pacing/observability layers.
-11. Suno Assistant writes request, submit, completed, blocked, or failed evidence rows.
-12. Operators review evidence rows and run artifacts from the local GSV session bundle.
+8. In `--fill-only` mode, Suno Assistant stops after field fill and never
+   submits generation.
+9. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
+10. Suno Assistant builds a request-aware GSV `VisitPlan`.
+11. GSV executes the plan through browser/session/pacing/observability layers.
+12. Suno Assistant writes request, submit, completed, blocked, or failed evidence rows.
+13. Operators review evidence rows and run artifacts from the local GSV session bundle.
 
 ## Design Decisions
 
@@ -247,3 +249,4 @@ download audio files or store cookies/storage state in evidence.
 - [x] Add initial prompt-to-song generation steps beyond the create-page visit.
 - [x] Add durable Suno-specific evidence extraction and artifact review beyond the minimal submit event.
 - [x] Add headed smoke-run instructions using GSV observability.
+- [x] Add fill-only create-box inspection mode.

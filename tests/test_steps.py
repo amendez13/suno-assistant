@@ -10,8 +10,10 @@ from suno_assistant.selectors import CREATE_BUTTON_SELECTORS, LYRICS_INPUT_SELEC
 from suno_assistant.steps import (
     FillSunoRequest,
     SubmitGeneration,
+    VerifyCreatePageFillable,
     VerifyCreatePageReady,
     WaitForGenerationResult,
+    _first_locator,
     classify_generation_outcome,
 )
 
@@ -38,6 +40,7 @@ class FakeLocator:
     async def count(self) -> int:
         return 1 if self.selector in self.page.available_selectors else 0
 
+    @property
     def first(self) -> "FakeLocator":
         return self
 
@@ -46,6 +49,12 @@ class FakeLocator:
 
     async def click(self) -> None:
         self.page.clicks.append(self.selector)
+
+
+class FakeLocatorWithoutFirst:
+    """Locator fake for the defensive fallback path."""
+
+    pass
 
 
 class FakePage:
@@ -99,6 +108,77 @@ def test_verify_create_page_ready_blocks_known_platform_state() -> None:
     assert classify_generation_outcome([result]) == "blocked"
 
 
+def test_verify_create_page_ready_accepts_ready_state() -> None:
+    """Ready pages should pass the submit-capable readiness gate."""
+    ctx = make_ctx(FakePage(["create_ready.html"]))
+    request = SongRequest.from_prompt("An original song about a ready create page.")
+
+    result = asyncio.run(VerifyCreatePageReady(request).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert result.extracted.ready_for_prompt is True
+
+
+def test_verify_create_page_ready_rejects_disabled_submit() -> None:
+    """Submit-capable generation should stop when create is disabled."""
+    ctx = make_ctx(FakePage(["create_disabled.html"]))
+    request = SongRequest.from_prompt("An original song about a disabled create button.")
+
+    result = asyncio.run(VerifyCreatePageReady(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Create button is disabled"
+
+
+def test_verify_create_page_ready_rejects_missing_create_button() -> None:
+    """Submit-capable generation should require a visible create control."""
+    ctx = make_ctx(FakePage(["create_no_button.html"]))
+    request = SongRequest.from_prompt("An original song about a missing create button.")
+
+    result = asyncio.run(VerifyCreatePageReady(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Create button is not visible"
+
+
+def test_verify_create_page_ready_rejects_missing_prompt() -> None:
+    """Submit-capable generation should require a prompt input."""
+    ctx = make_ctx(FakePage(["unauthenticated.html"]))
+    request = SongRequest.from_prompt("An original song about a missing prompt.")
+
+    result = asyncio.run(VerifyCreatePageReady(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "blocked:auth_required"
+
+
+def test_verify_create_page_fillable_allows_visible_prompt_with_quota_block() -> None:
+    """Fill-only preview should allow prompt entry when quota blocks submission."""
+    ctx = make_ctx(FakePage(["quota_unavailable.html"]))
+    request = SongRequest.from_prompt("An original song about filling a visible prompt.")
+
+    result = asyncio.run(VerifyCreatePageFillable(request).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert result.extracted["blocked_reason"] == "quota_unavailable"
+    assert result.extracted["fill_only"] is True
+    assert ctx.counters == {"suno.blocked_states_detected": 1}
+    assert ctx.extracted["suno_fill_only_blocked_reason"] == "quota_unavailable"
+    assert ctx.sink.events == []
+
+
+def test_verify_create_page_fillable_blocks_unauthenticated_page() -> None:
+    """Fill-only preview should still stop before unauthenticated pages."""
+    ctx = make_ctx(FakePage(["unauthenticated.html"]))
+    request = SongRequest.from_prompt("An original song about missing auth.")
+
+    result = asyncio.run(VerifyCreatePageFillable(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "blocked:auth_required"
+    assert ctx.sink.events[0][0] == "generation_blocked"
+
+
 def test_fill_suno_request_fills_prompt_and_required_lyrics() -> None:
     """The fill step should apply request fields through selector fallbacks."""
     request = SongRequest.from_mapping(
@@ -127,6 +207,23 @@ def test_fill_suno_request_fills_prompt_and_required_lyrics() -> None:
     ]
 
 
+def test_fill_suno_request_requires_style_selector_when_style_requested() -> None:
+    """Style requests should fail clearly when no style control is available."""
+    request = SongRequest.from_mapping(
+        {
+            "prompt": "An original song about missing style controls.",
+            "style": "bright acoustic pop",
+        }
+    )
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors={PROMPT_INPUT_SELECTORS.selectors[0]}))
+
+    result = asyncio.run(FillSunoRequest(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Style input selector not found"
+    assert ctx.sink.events[0][0] == "generation_failed"
+
+
 def test_fill_suno_request_requires_prompt_selector() -> None:
     """The generation plan must not submit if the prompt field is missing."""
     request = SongRequest.from_prompt("An original song about missing controls.")
@@ -136,6 +233,18 @@ def test_fill_suno_request_requires_prompt_selector() -> None:
 
     assert result.outcome == "fail"
     assert result.error == "Prompt input selector not found"
+
+
+def test_submit_generation_requires_create_button_selector() -> None:
+    """Submitting should fail clearly when no create selector matches."""
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors=set()))
+    request = SongRequest.from_prompt("An original song about a missing submit selector.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Create button selector not found"
+    assert ctx.sink.events[0][0] == "generation_failed"
 
 
 def test_submit_generation_clicks_create_button_and_records_event() -> None:
@@ -151,6 +260,13 @@ def test_submit_generation_clicks_create_button_and_records_event() -> None:
     assert ctx.sink.events[0][0] == "generation_submitted"
     assert ctx.sink.events[0][1]["attempt"] == 1
     assert ctx.sink.events[0][1]["request_id"]
+
+
+def test_first_locator_falls_back_when_locator_has_no_first_property() -> None:
+    """The helper should support minimal locator-like objects without first."""
+    locator = FakeLocatorWithoutFirst()
+
+    assert _first_locator(locator) is locator
 
 
 def test_wait_for_generation_result_detects_completed_results() -> None:

@@ -180,12 +180,14 @@ class TestProjectSummary:
             keep_open: bool = False,
             login: bool = False,
             song_request=None,
+            fill_only: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
             assert keep_open is False
             assert login is False
             assert song_request is None
+            assert fill_only is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -214,12 +216,14 @@ class TestProjectSummary:
             keep_open: bool = False,
             login: bool = False,
             song_request=None,
+            fill_only: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
             assert keep_open is True
             assert login is False
             assert song_request is None
+            assert fill_only is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -248,6 +252,7 @@ class TestProjectSummary:
             keep_open: bool = False,
             login: bool = False,
             song_request=None,
+            fill_only: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
@@ -255,6 +260,7 @@ class TestProjectSummary:
             assert login is False
             assert song_request.prompt == "Make an original acoustic song about a quiet morning."
             assert song_request.count == 1
+            assert fill_only is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -293,6 +299,7 @@ class TestProjectSummary:
             keep_open: bool = False,
             login: bool = False,
             song_request=None,
+            fill_only: bool = False,
         ) -> VisitResult:
             del headed, keep_open
             assert config_path == Path("config/config.yaml")
@@ -301,6 +308,7 @@ class TestProjectSummary:
             assert song_request.style == "cinematic synth pop"
             assert song_request.count == 2
             assert song_request.tags == ["smoke"]
+            assert fill_only is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -347,12 +355,14 @@ class TestProjectSummary:
             keep_open: bool = False,
             login: bool = False,
             song_request=None,
+            fill_only: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
             assert keep_open is False
             assert login is True
             assert song_request is None
+            assert fill_only is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -367,6 +377,68 @@ class TestProjectSummary:
 
         assert exit_code == 0
         assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_passes_fill_only_flag_with_prompt(self, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+        """Fill-only mode should pass a validated request without submit behavior."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_create_visit(
+            config_path: Path,
+            *,
+            headed: bool = False,
+            keep_open: bool = False,
+            login: bool = False,
+            song_request=None,
+            fill_only: bool = False,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert headed is True
+            assert keep_open is True
+            assert login is False
+            assert song_request.prompt == "Make an original acoustic song about filling the create box."
+            assert fill_only is True
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={"suno.requests_loaded": 1},
+                extracted={},
+                step_results=[StepResult(name="fill_suno_request", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_create_visit", fake_run_create_visit)
+
+        exit_code = main_module.main(
+            [
+                "--headed",
+                "--keep-open",
+                "--fill-only",
+                "--prompt",
+                "Make an original acoustic song about filling the create box.",
+            ]
+        )
+
+        assert exit_code == 0
+        assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_rejects_fill_only_without_request(self, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+        """Fill-only mode needs request content to put into the create box."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_create_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--fill-only"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "use --prompt or --request with --fill-only" in captured.err
 
     def test_main_rejects_invalid_prompt_before_browser_start(
         self, monkeypatch, capsys
@@ -441,7 +513,11 @@ class TestProjectSummary:
         monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
         monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
         monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
-        monkeypatch.setattr(main_module, "build_create_plan", lambda song_request=None: f"create-page-plan:{song_request}")
+        monkeypatch.setattr(
+            main_module,
+            "build_create_plan",
+            lambda song_request=None, fill_only=False: f"create-page-plan:{song_request}:{fill_only}",
+        )
         monkeypatch.setattr(main_module, "keep_browser_open", lambda page: main_module.asyncio.sleep(0))
 
         result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml")))
@@ -453,9 +529,57 @@ class TestProjectSummary:
         assert "enable_har_for_session" in events
         assert "new_page" in events
         assert "save_session" in events
-        assert ("plan", "create-page-plan:None") in events
+        assert ("plan", "create-page-plan:None:False") in events
         assert ("recorder_finalize", "completed", None) in events
         assert "close" in events
+
+    def test_run_create_visit_passes_fill_only_to_plan(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """Fill-only orchestration should build a non-submitting request plan."""
+        fake_result = VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"suno.requests_loaded": 1},
+            extracted={},
+            step_results=[StepResult(name="fill_suno_request", outcome="ok")],
+        )
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeVisitRunner.result = fake_result
+        FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        FakeSession.login_authenticated = True
+        request = main_module.SongRequest.from_prompt("Make an original song about filling a form.")
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
+        monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
+        monkeypatch.setattr(
+            main_module,
+            "build_create_plan",
+            lambda song_request=None, fill_only=False: f"create-page-plan:{song_request.prompt}:{fill_only}",
+        )
+
+        result = main_module.asyncio.run(
+            main_module.run_create_visit(Path("config/config.yaml"), song_request=request, fill_only=True)
+        )
+
+        assert result is fake_result
+        assert ("plan", "create-page-plan:Make an original song about filling a form.:True") in events
+        assert "save_session" in events
 
     def test_run_create_visit_blocks_when_auth_required(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         """Unauthenticated sessions should stop before the visit plan runs."""
@@ -568,7 +692,7 @@ class TestProjectSummary:
         monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
         monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
         monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
-        monkeypatch.setattr(main_module, "build_create_plan", lambda song_request=None: "create-page-plan")
+        monkeypatch.setattr(main_module, "build_create_plan", lambda song_request=None, fill_only=False: "create-page-plan")
         monkeypatch.setattr(main_module, "keep_browser_open", fake_keep_browser_open)
 
         result = main_module.asyncio.run(main_module.run_create_visit(Path("config/config.yaml"), keep_open=True))

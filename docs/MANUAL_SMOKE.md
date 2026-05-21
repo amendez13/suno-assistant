@@ -120,6 +120,27 @@ smoke path without `--prompt` or `--request`:
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 ```
 
+If you need to populate the create box for inspection without submitting, use
+fill-only mode:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --fill-only \
+  --request /tmp/suno-smoke-request.yaml
+```
+
+Expected fill-only behavior:
+
+- The browser opens the authenticated create page.
+- Supported request fields are filled.
+- The run never clicks create/generate.
+- The headed browser stays open when `--keep-open` is provided.
+- If quota blocks submission but the prompt input is visible, the run can still
+  fill the prompt for operator inspection.
+
 ## 5. Inspect Evidence
 
 Find the newest session bundle:

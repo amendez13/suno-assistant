@@ -79,6 +79,10 @@ python -m suno_assistant.main --prompt "A warm original synth pop song about pla
 # Or validate a structured song request before the create-page smoke visit
 python -m suno_assistant.main --request examples/song-request.yaml
 
+# Or fill the create box without submitting generation
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --fill-only \
+  --prompt "A warm original acoustic pop song about planning a careful launch."
+
 # Or keep a headed browser open for manual inspection
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 
@@ -199,6 +203,11 @@ Assistant runs the bounded MVP generation plan:
 The MVP path does not download generated audio, retry around platform blocks, or
 automate CAPTCHA/MFA. Live generation can consume account quota or credits, so
 use low-impact original prompts for manual smoke runs.
+
+Use `--fill-only` with `--prompt` or `--request` to populate supported create
+fields without clicking create/generate. This is useful for headed inspection
+and can still fill the prompt box when the page is authenticated and the prompt
+input is visible but generation submission is blocked by quota.
 
 There is no standalone dry-run flag in the MVP CLI. Request validation happens
 before browser startup, and invalid prompt or YAML inputs exit without opening
