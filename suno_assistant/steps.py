@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from gsv.visit import VisitContext
@@ -16,6 +17,8 @@ from .evidence import (
     generation_failed_payload,
     generation_submitted_payload,
     request_loaded_payload,
+    song_links_collected_payload,
+    song_links_failed_payload,
 )
 from .extractors import CreatePageState, extract_create_page_state
 from .requests import SongRequest
@@ -37,6 +40,7 @@ from .selectors import (
     TITLE_INPUT_SELECTORS,
     WEIRDNESS_SLIDER_SELECTORS,
 )
+from .song_links import SongLinkFormat, extract_song_links_page_state, write_song_links_file
 
 
 @dataclass
@@ -288,12 +292,85 @@ class WaitForGenerationResult:
         )
 
 
+@dataclass
+class CollectGeneratedSongLinks:
+    """Collect visible generated-song links and write them to an operator file."""
+
+    output_path: Path
+    source_url: str
+    output_format: SongLinkFormat | None = None
+    timeout_seconds: float = 20.0
+    poll_interval_seconds: float = 1.0
+    name: str = "collect_generated_song_links"
+    content_marker: str | None = None
+    skip_runner_burst_tick: bool = True
+
+    async def execute(self, ctx: VisitContext) -> StepResult:
+        """Poll the loaded page briefly, then export any visible song links."""
+
+        deadline = time.monotonic() + max(0.1, self.timeout_seconds)
+        while True:
+            state = await extract_song_links_page_state(ctx.page, base_url=self.source_url)
+            ctx.extracted["song_links_page_state"] = state
+            if state.blocked_reason is not None:
+                ctx.increment("suno.song_link_collection_blocked")
+                await ctx.sink.write(
+                    "song_links_failed",
+                    song_links_failed_payload(
+                        phase=self.name,
+                        error=f"blocked:{state.blocked_reason}",
+                        source_url=self.source_url,
+                    ),
+                )
+                return StepResult(name=self.name, outcome="fail", error=f"blocked:{state.blocked_reason}", extracted=state)
+            if state.songs or time.monotonic() >= deadline:
+                export = write_song_links_file(
+                    self.output_path,
+                    state.songs,
+                    source_url=self.source_url,
+                    output_format=self.output_format,
+                )
+                ctx.increment("suno.song_links_collected", len(state.songs))
+                ctx.extracted["song_links"] = state.songs
+                ctx.extracted["song_links_output_path"] = str(self.output_path)
+                await ctx.sink.write(
+                    "song_links_collected",
+                    song_links_collected_payload(
+                        songs=state.songs,
+                        output_path=str(self.output_path),
+                        source_url=self.source_url,
+                    ),
+                )
+                return StepResult(
+                    name=self.name,
+                    outcome="ok",
+                    extracted={
+                        "output_path": str(self.output_path),
+                        "result_count": export.count,
+                        "source_url": export.source_url,
+                    },
+                )
+            await asyncio.sleep(max(0.0, self.poll_interval_seconds))
+
+
 def classify_generation_outcome(step_results: list[StepResult]) -> VisitOutcome:
     """Classify generation outcomes with known platform blocks separated."""
     for result in step_results:
         if result.outcome != "fail":
             continue
         if _is_blocked_step(result):
+            return "blocked"
+        return "failed"
+    return "completed"
+
+
+def classify_song_collection_outcome(step_results: list[StepResult]) -> VisitOutcome:
+    """Classify song-link collection outcomes with auth blocks separated."""
+
+    for result in step_results:
+        if result.outcome != "fail":
+            continue
+        if result.error and result.error.startswith("blocked:"):
             return "blocked"
         return "failed"
     return "completed"

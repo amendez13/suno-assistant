@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from gsv.apps import register_app
 from gsv.visit import VisitContext, VisitPlan
 from gsv.visit.steps import Navigate
 
 from .requests import SongRequest
+from .song_links import SongLinkFormat
 from .steps import (
+    CollectGeneratedSongLinks,
     FillSunoRequest,
     SelectAdvancedMode,
     SubmitGeneration,
@@ -15,9 +19,11 @@ from .steps import (
     VerifyCreatePageReady,
     WaitForGenerationResult,
     classify_generation_outcome,
+    classify_song_collection_outcome,
 )
 
 SUNO_CREATE_URL = "https://suno.com/create"
+SUNO_LIBRARY_URL = "https://suno.com/library"
 
 
 def build_plan(
@@ -47,6 +53,30 @@ def build_plan(
     )
 
 
+def build_song_collection_plan(
+    *,
+    output_path: Path,
+    output_format: SongLinkFormat | None = None,
+    source_url: str = SUNO_LIBRARY_URL,
+) -> VisitPlan:
+    """Build a bounded plan that exports visible generated-song links."""
+
+    return VisitPlan(
+        steps=[
+            Navigate(
+                url=source_url,
+                name="navigate_song_links_source",
+            ),
+            CollectGeneratedSongLinks(
+                output_path=output_path,
+                output_format=output_format,
+                source_url=source_url,
+            ),
+        ],
+        outcome_classifier=classify_song_collection_outcome,
+    )
+
+
 register_app("suno", build_plan)
 
-__all__ = ["SUNO_CREATE_URL", "build_plan"]
+__all__ = ["SUNO_CREATE_URL", "SUNO_LIBRARY_URL", "build_plan", "build_song_collection_plan"]

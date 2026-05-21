@@ -10,6 +10,7 @@ from typing import Any
 
 from .extractors import CreatePageState, SongResultSummary
 from .requests import SongRequest
+from .song_links import GeneratedSongLink
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,34 @@ def generation_failed_payload(
         "phase": phase,
         "error": error,
         "page_state": page_state_payload(state) if state is not None else None,
+        "recorded_at": _now_iso(),
+    }
+
+
+def song_links_collected_payload(
+    *,
+    songs: list[GeneratedSongLink],
+    output_path: str,
+    source_url: str,
+) -> dict[str, Any]:
+    """Build the song_links_collected evidence payload."""
+
+    return {
+        "source_url": source_url,
+        "output_path": output_path,
+        "result_count": len(songs),
+        "results": [asdict(song) for song in songs],
+        "recorded_at": _now_iso(),
+    }
+
+
+def song_links_failed_payload(*, phase: str, error: str, source_url: str) -> dict[str, Any]:
+    """Build the song_links_failed evidence payload."""
+
+    return {
+        "source_url": source_url,
+        "phase": phase,
+        "error": error,
         "recorded_at": _now_iso(),
     }
 

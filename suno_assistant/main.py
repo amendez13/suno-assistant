@@ -26,7 +26,10 @@ from .auth import AUTH_REQUIRED_MESSAGE, build_suno_auth_adapter
 from .logging_config import configure_logging
 from .release_info import get_release_info
 from .requests import SongRequest, SongRequestError, load_song_request
+from .song_links import SongLinkFormat
+from .visit import SUNO_LIBRARY_URL
 from .visit import build_plan as build_create_plan
+from .visit import build_song_collection_plan
 
 LOGGER = logging.getLogger(__name__)
 
@@ -89,6 +92,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--fill-only",
         action="store_true",
         help="Fill a validated song request into the create page without clicking create/generate.",
+    )
+    parser.add_argument(
+        "--collect-songs",
+        type=Path,
+        metavar="OUTPUT",
+        help="Collect visible generated-song titles and links from Suno and write them to OUTPUT.",
+    )
+    parser.add_argument(
+        "--songs-url",
+        default=SUNO_LIBRARY_URL,
+        help="Suno page to inspect when collecting generated-song links.",
+    )
+    parser.add_argument(
+        "--songs-format",
+        choices=("json", "jsonl", "markdown"),
+        default=None,
+        help="Output format for --collect-songs. Defaults to the output file extension.",
     )
     request_group = parser.add_mutually_exclusive_group()
     request_group.add_argument("--request", type=Path, help="Path to a YAML song request file.")
@@ -228,6 +248,57 @@ async def run_create_visit(
         await browser.close()
 
 
+async def run_song_collection_visit(
+    config_path: Path,
+    *,
+    output_path: Path,
+    output_format: SongLinkFormat | None = None,
+    source_url: str = SUNO_LIBRARY_URL,
+    headed: bool = False,
+    keep_open: bool = False,
+) -> VisitResult:
+    """Run a bounded Suno song-link collection visit through the gsv runtime."""
+
+    resolved = load_runtime_config(config_path, headed=headed)
+    browser = BrowserManager(resolved.visitor, resolved.site, rng=random.Random())
+    recorder = open_session_recorder(resolved.visitor, resolved.site, browser)
+    session = Session(browser, build_suno_auth_adapter(resolved.site), resolved.visitor, rng=random.Random())
+    visit_result: VisitResult | None = None
+
+    try:
+        browser.attach_recorder(recorder)
+        authenticated = await session.start()
+        if not authenticated:
+            visit_result = build_auth_required_result()
+            return visit_result
+        await browser.enable_har_for_session()
+        await browser.start_tracing()
+        page = await browser.new_page()
+        pacing = build_pacing(resolved.visitor, resolved.site, browser.rate_limiter, rng=random.Random())
+        visit_ctx = VisitContext(
+            page=page,
+            pacing=pacing,
+            config=resolved.visitor,
+            site=resolved.site,
+            rng=random.Random(),
+            recorder=recorder,
+        )
+        plan = build_song_collection_plan(
+            output_path=output_path,
+            output_format=output_format,
+            source_url=source_url,
+        )
+        visit_result = await VisitRunner(visit_ctx).run(plan)
+        if keep_open:
+            await keep_browser_open(page)
+        return visit_result
+    finally:
+        if session.is_authenticated:
+            await browser.save_session()
+        await finalize_recording(browser, recorder, visit_result)
+        await browser.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the local CLI."""
     args = parse_args(argv)
@@ -243,6 +314,27 @@ def main(argv: list[str] | None = None) -> int:
     if args.login and not args.headed:
         print("Invalid login request: use --headed --login for manual Suno login bootstrap.", file=sys.stderr)
         return 2
+    if args.collect_songs is not None:
+        if args.login or args.fill_only or args.request is not None or args.prompt is not None:
+            print(
+                "Invalid song collection request: use --collect-songs without --login, --fill-only, --prompt, or --request.",
+                file=sys.stderr,
+            )
+            return 2
+        result = asyncio.run(
+            run_song_collection_visit(
+                args.config,
+                output_path=args.collect_songs,
+                output_format=args.songs_format,
+                source_url=args.songs_url,
+                headed=args.headed,
+                keep_open=args.keep_open,
+            )
+        )
+        count = result.counters.get("suno.song_links_collected", 0)
+        print(f"Collected {count} song link(s): {args.collect_songs}")
+        print(f"Run {result.outcome}: {describe_project().site_name}")
+        return 0 if result.outcome == "completed" else 1
     try:
         song_request = resolve_song_request(args)
     except SongRequestError as exc:

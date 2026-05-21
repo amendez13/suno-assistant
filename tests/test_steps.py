@@ -24,6 +24,7 @@ from suno_assistant.selectors import (
     WEIRDNESS_SLIDER_SELECTORS,
 )
 from suno_assistant.steps import (
+    CollectGeneratedSongLinks,
     FillSunoRequest,
     SelectAdvancedMode,
     SubmitGeneration,
@@ -33,6 +34,7 @@ from suno_assistant.steps import (
     _fill_first_available,
     _first_locator,
     classify_generation_outcome,
+    classify_song_collection_outcome,
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "suno"
@@ -565,3 +567,49 @@ def test_wait_for_generation_result_times_out() -> None:
     assert ctx.sink.events[0][0] == "generation_failed"
     assert ctx.sink.events[0][1]["phase"] == "wait_for_generation_result"
     assert classify_generation_outcome([result]) == "failed"
+
+
+def test_collect_generated_song_links_writes_output_file(tmp_path: Path) -> None:
+    """The collection step should export visible generated-song links."""
+
+    output_path = tmp_path / "songs.json"
+    ctx = make_ctx(FakePage(["library_with_songs.html"]))
+
+    result = asyncio.run(
+        CollectGeneratedSongLinks(
+            output_path=output_path,
+            source_url="https://suno.com/library",
+            timeout_seconds=0.1,
+            poll_interval_seconds=0,
+        ).execute(ctx)
+    )
+
+    assert result.outcome == "ok"
+    assert result.extracted["result_count"] == 3
+    assert ctx.counters == {"suno.song_links_collected": 3}
+    assert ctx.sink.events[0][0] == "song_links_collected"
+    assert output_path.exists()
+    assert classify_song_collection_outcome([result]) == "completed"
+
+
+def test_collect_generated_song_links_blocks_unauthenticated_page(tmp_path: Path) -> None:
+    """Collection should stop before writing when the library requires auth."""
+
+    output_path = tmp_path / "songs.json"
+    ctx = make_ctx(FakePage(["library_unauthenticated.html"]))
+
+    result = asyncio.run(
+        CollectGeneratedSongLinks(
+            output_path=output_path,
+            source_url="https://suno.com/library",
+            timeout_seconds=0.1,
+            poll_interval_seconds=0,
+        ).execute(ctx)
+    )
+
+    assert result.outcome == "fail"
+    assert result.error == "blocked:auth_required"
+    assert ctx.counters == {"suno.song_link_collection_blocked": 1}
+    assert ctx.sink.events[0][0] == "song_links_failed"
+    assert not output_path.exists()
+    assert classify_song_collection_outcome([result]) == "blocked"

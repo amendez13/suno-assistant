@@ -16,6 +16,7 @@ bounded browser execution, pacing, persisted session state, and run artifacts.
 - Site-specific Suno visit plans kept outside the reusable framework.
 - A bounded create-page smoke run that exercises the Suno-specific app through `gsv`.
 - A bounded prompt-to-song workflow for original song instructions, generation requests, and evidence capture.
+- Generated-song link export to JSON, JSONL, or Markdown for downstream project tracking.
 - Gentle human-cadence browsing through `gentle-site-visitor` primitives.
 - Per-run observability through manifests, evidence JSONL, HAR, trace, and logs.
 - Repository workflow with CI, pre-commit, branch protection docs, and session notes.
@@ -109,6 +110,21 @@ stops after populating supported fields and never clicks create/generate. It doe
 download audio files or bypass Suno quotas, moderation, CAPTCHA, MFA, or other
 platform controls.
 
+Collect visible generated-song titles and links from the authenticated Suno
+library without downloading audio:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --collect-songs data/song-links/latest.json
+```
+
+The collector writes JSON by default, JSONL for `.jsonl`, and Markdown for
+`.md` or `.markdown`. Use `--songs-url` to inspect another Suno page with
+visible song cards, such as `https://suno.com/create`, and `--songs-format` to
+set the format explicitly. See [docs/SONG_LINKS.md](docs/SONG_LINKS.md).
+
 To inspect the page manually in a visible browser and keep it open after the first navigation:
 
 ```bash
@@ -144,7 +160,8 @@ data/sessions/suno/<session-id>/evidence.jsonl
 ```
 
 Events include `request_loaded`, `generation_submitted`,
-`generation_completed`, `generation_blocked`, and `generation_failed`. Evidence
+`generation_completed`, `generation_blocked`, `generation_failed`, and
+`song_links_collected`. Evidence
 contains the explicit prompt and visible result metadata, so treat session
 artifacts as sensitive local files.
 

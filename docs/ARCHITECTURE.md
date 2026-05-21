@@ -72,6 +72,8 @@ flowchart LR
 - Fill Basic or deterministic Advanced-mode controls from a validated song request.
 - Submit one bounded generation request when a validated song request is
   supplied and the run is not fill-only.
+- Collect visible generated-song titles and links into operator-selected files
+  for downstream project tracking.
 - Construct GSV `VisitPlan` instances.
 - Emit Suno-specific generation evidence events.
 
@@ -83,6 +85,7 @@ flowchart LR
 - `suno_assistant/steps.py`
 - `suno_assistant/main.py`
 - `suno_assistant/requests.py`
+- `suno_assistant/song_links.py`
 - `suno_assistant/visit.py`
 - `tests/fixtures/suno/*.html`
 
@@ -121,10 +124,15 @@ observability mechanics.
    expand More Options by its `aria-expanded` state when needed, and set sliders
    from their `aria-valuenow` values with keyboard nudges.
 10. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
-11. Suno Assistant builds a request-aware GSV `VisitPlan`.
-12. GSV executes the plan through browser/session/pacing/observability layers.
-13. Suno Assistant writes request, submit, completed, blocked, or failed evidence rows.
-14. Operators review evidence rows and run artifacts from the local GSV session bundle.
+11. With `--collect-songs`, Suno Assistant navigates to the configured Suno
+   song-listing page, extracts visible song-card titles and links, normalizes
+   Suno URLs, and writes JSON, JSONL, or Markdown output without downloading
+   media.
+12. Suno Assistant builds a request-aware or song-link collection GSV `VisitPlan`.
+13. GSV executes the plan through browser/session/pacing/observability layers.
+14. Suno Assistant writes request, submit, completed, blocked, failed, or
+   `song_links_collected` evidence rows.
+15. Operators review evidence rows and run artifacts from the local GSV session bundle.
 
 ## Design Decisions
 
