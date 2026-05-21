@@ -141,6 +141,33 @@ Expected fill-only behavior:
 - If quota blocks submission but the prompt input is visible, the run can still
   fill the prompt for operator inspection.
 
+To inspect Advanced mode, use the advanced example request:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --fill-only \
+  --request examples/advanced-song-request.yaml
+```
+
+Expected Advanced fill behavior:
+
+- The Advanced tab is selected.
+- Lyrics, Styles, Song Title, Exclude styles, vocal gender, style mode,
+  Weirdness, and Style Influence are populated when the matching request fields
+  are present.
+- More Options remains expanded when `exclude_styles`, `vocal_gender`,
+  `style_mode`, `weirdness`, or `style_influence` is requested.
+- Weirdness and Style Influence are set from their current slider values to the
+  requested percentages.
+- Audio, Voice, Inspo, saved style chips, random/generative helper buttons, and
+  workspace selectors are left untouched.
+
+For the detailed create-page UI contract, including how hidden duplicate inputs,
+More Options, and sliders are handled, see [CREATE_BOX.md](CREATE_BOX.md).
+
 ## 5. Inspect Evidence
 
 Find the newest session bundle:

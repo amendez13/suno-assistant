@@ -83,6 +83,10 @@ python -m suno_assistant.main --request examples/song-request.yaml
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open --fill-only \
   --prompt "A warm original acoustic pop song about planning a careful launch."
 
+# Or fill Advanced mode controls without submitting generation
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --fill-only \
+  --request examples/advanced-song-request.yaml
+
 # Or keep a headed browser open for manual inspection
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 
@@ -208,6 +212,15 @@ Use `--fill-only` with `--prompt` or `--request` to populate supported create
 fields without clicking create/generate. This is useful for headed inspection
 and can still fill the prompt box when the page is authenticated and the prompt
 input is visible but generation submission is blocked by quota.
+
+Set `advanced_mode: true` in a request file to switch to Suno Advanced mode and
+fill deterministic Advanced controls: lyrics, style, exclude styles,
+instrumental, vocal gender, style mode, Weirdness, and Style Influence. The app
+does not operate account asset pickers or generative helper buttons such as
+Audio, Voice, Inspo, saved styles, random prompts, lyrics generation, or
+workspace selection. See [CREATE_BOX.md](CREATE_BOX.md) for the full
+create-page UI contract, including visible-field selection, More Options
+expansion, title filling, and slider setting.
 
 There is no standalone dry-run flag in the MVP CLI. Request validation happens
 before browser startup, and invalid prompt or YAML inputs exit without opening

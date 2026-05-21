@@ -42,6 +42,10 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Operator workflow for headed login bootstrap and bounded live smoke runs
 - Prompt/request examples, evidence review, artifact retention, and safety boundaries
 
+**[CREATE_BOX.md](CREATE_BOX.md)**
+- Create-page UI behavior from the operator point of view
+- Basic and Advanced request-to-control mapping, More Options handling, slider behavior, and unsupported controls
+
 **[AI_SKILLS.md](AI_SKILLS.md)**
 - Canonical AI skills source tree
 - Dual deployment to Claude and Codex
@@ -139,6 +143,10 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Bounded prompt-to-song smoke checklist
 - Evidence inspection and local artifact cleanup
 
+**[CREATE_BOX.md](CREATE_BOX.md)**
+- Headed fill-only create-box inspection
+- Advanced mode, More Options, title, Weirdness, and Style Influence behavior
+
 **[OBSERVABILITY.md](OBSERVABILITY.md)**
 - Health endpoint, logging, and Loki query guidance
 - systemd naming and session-artifact conventions
@@ -193,6 +201,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 | [README.md](../README.md) | Getting started, installation, usage | All users |
 | [SETUP.md](SETUP.md) | Environment configuration | All users |
 | [MANUAL_SMOKE.md](MANUAL_SMOKE.md) | Headed login, live smoke checks, artifact review | Operators, developers |
+| [CREATE_BOX.md](CREATE_BOX.md) | Create UI behavior and Advanced control mapping | Operators, developers |
 | [AI_SKILLS.md](AI_SKILLS.md) | AI skill source, deploy, and starter-skill guide | Developers |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture and design | Developers |
 | [CI.md](CI.md) | CI/CD pipeline and development workflow | Developers |

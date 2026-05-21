@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
 MAX_REQUEST_COUNT = 4
+SliderValue = int
+VocalGender = Literal["male", "female"]
+StyleMode = Literal["manual", "auto"]
 
 _KNOWN_FIELDS = frozenset(
     {
@@ -18,6 +21,12 @@ _KNOWN_FIELDS = frozenset(
         "lyrics",
         "instrumental",
         "custom_mode",
+        "advanced_mode",
+        "exclude_styles",
+        "vocal_gender",
+        "style_mode",
+        "weirdness",
+        "style_influence",
         "count",
         "tags",
         "notes",
@@ -47,6 +56,12 @@ class SongRequest:
     lyrics: str | None = None
     instrumental: bool = False
     custom_mode: bool = False
+    advanced_mode: bool = False
+    exclude_styles: str | None = None
+    vocal_gender: VocalGender | None = None
+    style_mode: StyleMode | None = None
+    weirdness: SliderValue | None = None
+    style_influence: SliderValue | None = None
     count: int = 1
     tags: list[str] = field(default_factory=list)
     notes: str | None = None
@@ -65,6 +80,12 @@ class SongRequest:
             lyrics=_optional_string(raw.get("lyrics"), "lyrics"),
             instrumental=_optional_bool(raw.get("instrumental"), "instrumental", default=False),
             custom_mode=_optional_bool(raw.get("custom_mode"), "custom_mode", default=False),
+            advanced_mode=_optional_bool(raw.get("advanced_mode"), "advanced_mode", default=False),
+            exclude_styles=_optional_string(raw.get("exclude_styles"), "exclude_styles"),
+            vocal_gender=_optional_choice(raw.get("vocal_gender"), "vocal_gender", ("male", "female")),
+            style_mode=_optional_choice(raw.get("style_mode"), "style_mode", ("manual", "auto")),
+            weirdness=_optional_slider(raw.get("weirdness"), "weirdness"),
+            style_influence=_optional_slider(raw.get("style_influence"), "style_influence"),
             count=_optional_int(raw.get("count"), "count", default=1),
             tags=_optional_string_list(raw.get("tags"), "tags"),
             notes=_optional_string(raw.get("notes"), "notes"),
@@ -90,6 +111,18 @@ class SongRequest:
         _reject_restricted_imitation(self.prompt, "prompt")
         if self.style is not None:
             _reject_restricted_imitation(self.style, "style")
+
+    @property
+    def uses_advanced_controls(self) -> bool:
+        """Return whether this request needs the Suno Advanced tab."""
+        return bool(
+            self.advanced_mode
+            or self.exclude_styles is not None
+            or self.vocal_gender is not None
+            or self.style_mode is not None
+            or self.weirdness is not None
+            or self.style_influence is not None
+        )
 
 
 def load_song_request(path: str | Path) -> SongRequest:
@@ -148,6 +181,27 @@ def _optional_string_list(value: Any, field_name: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
         raise SongRequestError(f"{field_name} must be a list of non-empty strings")
     return list(value)
+
+
+def _optional_choice(value: Any, field_name: str, choices: tuple[str, ...]) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SongRequestError(f"{field_name} must be a string")
+    normalized = value.strip().casefold()
+    if normalized not in choices:
+        raise SongRequestError(f"{field_name} must be one of: {', '.join(choices)}")
+    return normalized
+
+
+def _optional_slider(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SongRequestError(f"{field_name} must be an integer between 0 and 100")
+    if not 0 <= value <= 100:
+        raise SongRequestError(f"{field_name} must be between 0 and 100")
+    return int(value)
 
 
 def _reject_restricted_imitation(value: str, field_name: str) -> None:

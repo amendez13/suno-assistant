@@ -43,6 +43,30 @@ class TestSongRequest:
         assert request.tags == ["mvp", "demo"]
         assert request.notes == "local note"
 
+    def test_from_mapping_parses_advanced_controls(self) -> None:
+        """Advanced-mode fields should map onto typed request attributes."""
+        request = SongRequest.from_mapping(
+            {
+                "prompt": "An original art pop song about a careful launch.",
+                "advanced_mode": True,
+                "style": "art pop, odd percussion, warm synths",
+                "lyrics": "We launch when the signal is clear",
+                "exclude_styles": "metal, harsh noise",
+                "vocal_gender": "Female",
+                "style_mode": "Manual",
+                "weirdness": 65,
+                "style_influence": 80,
+            }
+        )
+
+        assert request.advanced_mode is True
+        assert request.uses_advanced_controls is True
+        assert request.exclude_styles == "metal, harsh noise"
+        assert request.vocal_gender == "female"
+        assert request.style_mode == "manual"
+        assert request.weirdness == 65
+        assert request.style_influence == 80
+
     @pytest.mark.parametrize(
         ("raw", "message"),
         [
@@ -53,6 +77,10 @@ class TestSongRequest:
             ({"prompt": "valid", "unknown": "field"}, "Unknown request field"),
             ({"prompt": "valid", "tags": ["ok", ""]}, "tags must be a list of non-empty strings"),
             ({"prompt": "valid", "instrumental": "false"}, "instrumental must be a boolean"),
+            ({"prompt": "valid", "vocal_gender": "both"}, "vocal_gender must be one of"),
+            ({"prompt": "valid", "style_mode": "sometimes"}, "style_mode must be one of"),
+            ({"prompt": "valid", "weirdness": 101}, "weirdness must be between 0 and 100"),
+            ({"prompt": "valid", "style_influence": "high"}, "style_influence must be an integer"),
         ],
     )
     def test_from_mapping_rejects_invalid_requests(self, raw: dict, message: str) -> None:

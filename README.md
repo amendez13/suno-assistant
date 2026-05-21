@@ -89,6 +89,17 @@ python -m suno_assistant.main \
   --prompt "A warm original acoustic pop song about writing a careful checklist before launch."
 ```
 
+Fill Suno Advanced mode controls without submitting:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --fill-only \
+  --request examples/advanced-song-request.yaml
+```
+
 The current request-aware path validates the song request before browser startup
 and runs the bounded generation plan after the saved Suno session is verified.
 The MVP generation path fills supported fields, submits once, waits within a
@@ -139,7 +150,9 @@ artifacts as sensitive local files.
 
 For the full operator checklist, including headed login bootstrap, bounded live
 smoke runs, evidence review, and artifact cleanup, see
-[docs/MANUAL_SMOKE.md](docs/MANUAL_SMOKE.md).
+[docs/MANUAL_SMOKE.md](docs/MANUAL_SMOKE.md). For the detailed create-page UI
+contract, including Advanced mode, More Options, title filling, and slider
+behavior, see [docs/CREATE_BOX.md](docs/CREATE_BOX.md).
 
 ## Configuration
 
@@ -184,6 +197,27 @@ counts, lyrics on instrumental requests, and explicit requests to imitate a
 specific artist or voice. The initial hard cap is `4` generations per request.
 Validation happens before browser startup for `--prompt` and `--request`; the
 MVP CLI does not include a separate dry-run flag.
+
+Advanced-mode request files can add deterministic Suno Advanced controls:
+
+```yaml
+advanced_mode: true
+exclude_styles: "metal, harsh noise"
+vocal_gender: female
+style_mode: manual
+weirdness: 62
+style_influence: 78
+```
+
+The app fills text fields, two-choice buttons, and sliders. It does not operate
+asset pickers such as Audio, Voice, Inspo, workspace selection, saved styles, or
+random/generative helper buttons.
+
+Advanced mode handles Suno's current create UI by filling the first visible
+matching field, using the More Options `aria-expanded` state to avoid collapsing
+the panel, and setting sliders from their current `aria-valuenow` value with
+keyboard nudges. This keeps the behavior visible, bounded, and inspectable in
+headed fill-only runs.
 
 ## Project Structure
 
