@@ -69,8 +69,9 @@ flowchart LR
   running create-page workflows.
 - Centralize Suno create-page selectors and fixture-backed page-state extraction.
 - Choose bounded Suno create-page workflows.
-- Fill and submit one bounded generation request when a validated song request
-  is supplied.
+- Fill Basic or deterministic Advanced-mode controls from a validated song request.
+- Submit one bounded generation request when a validated song request is
+  supplied and the run is not fill-only.
 - Construct GSV `VisitPlan` instances.
 - Emit Suno-specific generation evidence events.
 
@@ -116,11 +117,14 @@ observability mechanics.
    and submits one create/generate action.
 8. In `--fill-only` mode, Suno Assistant stops after field fill and never
    submits generation.
-9. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
-10. Suno Assistant builds a request-aware GSV `VisitPlan`.
-11. GSV executes the plan through browser/session/pacing/observability layers.
-12. Suno Assistant writes request, submit, completed, blocked, or failed evidence rows.
-13. Operators review evidence rows and run artifacts from the local GSV session bundle.
+9. Advanced-mode requests select the Advanced tab, fill visible text inputs,
+   expand More Options by its `aria-expanded` state when needed, and set sliders
+   from their `aria-valuenow` values with keyboard nudges.
+10. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
+11. Suno Assistant builds a request-aware GSV `VisitPlan`.
+12. GSV executes the plan through browser/session/pacing/observability layers.
+13. Suno Assistant writes request, submit, completed, blocked, or failed evidence rows.
+14. Operators review evidence rows and run artifacts from the local GSV session bundle.
 
 ## Design Decisions
 
@@ -228,6 +232,25 @@ download audio files or store cookies/storage state in evidence.
 - Pro: Evidence remains metadata-oriented rather than media archival.
 - Con: Prompt text and visible result metadata are still sensitive local artifacts.
 
+### Decision 8: Treat Advanced Controls As Visible UI Controls
+
+**Context**: Suno's Advanced create UI can keep hidden duplicate inputs and
+collapsed More Options controls in the DOM while rendering a separate visible
+panel for the operator.
+
+**Decision**: Fill the first visible matching control, use More Options
+`aria-expanded` rather than raw visibility to decide whether to expand the
+panel, and set sliders by focusing the visible slider and nudging from
+`aria-valuenow` to the requested value.
+
+**Consequences**:
+- Pro: Headed fill-only runs match what the operator sees on screen.
+- Pro: The app avoids brittle coordinate clicks and hidden duplicate inputs.
+- Pro: Slider changes remain observable as UI interactions instead of direct
+  DOM mutation.
+- Con: Future Suno UI changes can still require selector updates and live
+  smoke verification.
+
 ## Performance Considerations
 
 - Favor slow, bounded, observable runs over throughput.
@@ -250,3 +273,4 @@ download audio files or store cookies/storage state in evidence.
 - [x] Add durable Suno-specific evidence extraction and artifact review beyond the minimal submit event.
 - [x] Add headed smoke-run instructions using GSV observability.
 - [x] Add fill-only create-box inspection mode.
+- [x] Add deterministic Advanced-mode field fill for text fields, buttons, and sliders.

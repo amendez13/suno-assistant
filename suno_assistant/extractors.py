@@ -108,14 +108,18 @@ def classify_create_page_html(html: str) -> CreatePageState:
     blocked_reason = _blocked_reason(document_text)
     results = _extract_results(elements)
     prompt_visible = _has_input(elements, _PROMPT_MARKERS)
+    style_visible = _has_input(elements, _STYLE_MARKERS)
+    lyrics_visible = _has_input(elements, _LYRICS_MARKERS)
     create_button = _find_create_button(elements)
-    authenticated = prompt_visible and blocked_reason != "auth_required"
+    authenticated = blocked_reason != "auth_required" and bool(
+        prompt_visible or style_visible or lyrics_visible or create_button is not None
+    )
 
     return CreatePageState(
         authenticated=authenticated,
         prompt_input_visible=prompt_visible,
-        style_input_visible=_has_input(elements, _STYLE_MARKERS),
-        lyrics_input_visible=_has_input(elements, _LYRICS_MARKERS),
+        style_input_visible=style_visible,
+        lyrics_input_visible=lyrics_visible,
         custom_mode_available=_has_custom_mode(elements),
         create_button_visible=create_button is not None,
         create_button_enabled=bool(create_button is not None and not _is_disabled(create_button)),

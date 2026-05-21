@@ -9,6 +9,7 @@ from gsv.visit.steps import Navigate
 from .requests import SongRequest
 from .steps import (
     FillSunoRequest,
+    SelectAdvancedMode,
     SubmitGeneration,
     VerifyCreatePageFillable,
     VerifyCreatePageReady,
@@ -34,6 +35,8 @@ def build_plan(
         )
     ]
     if song_request is not None:
+        if song_request.uses_advanced_controls:
+            steps.append(SelectAdvancedMode(song_request))
         verify_step = VerifyCreatePageFillable(song_request) if fill_only else VerifyCreatePageReady(song_request)
         steps.extend([verify_step, FillSunoRequest(song_request)])
         if not fill_only:
