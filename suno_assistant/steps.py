@@ -54,6 +54,46 @@ class VerifyCreatePageReady:
 
 
 @dataclass
+class VerifyCreatePageFillable:
+    """Verify the create page has a prompt box for fill-only preview runs."""
+
+    request: SongRequest
+    name: str = "verify_create_page_fillable"
+    content_marker: str | None = None
+
+    async def execute(self, ctx: VisitContext) -> StepResult:
+        """Allow filling visible prompt controls without requiring submission readiness."""
+        state = await extract_create_page_state(ctx.page)
+        ctx.extracted["suno_create_state"] = state
+        if not state.authenticated:
+            await ctx.sink.write("generation_blocked", generation_blocked_payload(self.request, phase=self.name, state=state))
+            return StepResult(name=self.name, outcome="fail", error="blocked:auth_required", extracted=state)
+        if not state.prompt_input_visible:
+            if state.blocked_reason is not None:
+                _increment_blocked_counters(ctx, state)
+                await ctx.sink.write(
+                    "generation_blocked",
+                    generation_blocked_payload(self.request, phase=self.name, state=state),
+                )
+                return StepResult(name=self.name, outcome="fail", error=f"blocked:{state.blocked_reason}", extracted=state)
+            return StepResult(name=self.name, outcome="fail", error="Prompt input is not visible", extracted=state)
+        if state.blocked_reason is not None:
+            _increment_blocked_counters(ctx, state)
+            ctx.extracted["suno_fill_only_blocked_reason"] = state.blocked_reason
+        return StepResult(
+            name=self.name,
+            outcome="ok",
+            extracted={
+                "prompt_input_visible": state.prompt_input_visible,
+                "create_button_visible": state.create_button_visible,
+                "create_button_enabled": state.create_button_enabled,
+                "blocked_reason": state.blocked_reason,
+                "fill_only": True,
+            },
+        )
+
+
+@dataclass
 class FillSunoRequest:
     """Fill supported Suno create-page fields from a validated request."""
 
@@ -193,7 +233,7 @@ async def _fill_first_available(page: Any, selectors: tuple[str, ...], value: st
         locator = page.locator(selector)
         if int(await locator.count()) <= 0:
             continue
-        target = locator.first() if hasattr(locator, "first") else locator
+        target = _first_locator(locator)
         await target.fill(value)
         return True
     return False
@@ -204,7 +244,7 @@ async def _click_first_available(page: Any, selectors: tuple[str, ...]) -> bool:
         locator = page.locator(selector)
         if int(await locator.count()) <= 0:
             continue
-        target = locator.first() if hasattr(locator, "first") else locator
+        target = _first_locator(locator)
         await target.click()
         return True
     return False
@@ -212,6 +252,13 @@ async def _click_first_available(page: Any, selectors: tuple[str, ...]) -> bool:
 
 async def _click_optional(page: Any, selectors: tuple[str, ...]) -> None:
     await _click_first_available(page, selectors)
+
+
+def _first_locator(locator: Any) -> Any:
+    first = getattr(locator, "first", None)
+    if first is None:
+        return locator
+    return first() if callable(first) else first
 
 
 def _is_blocked_step(result: StepResult) -> bool:

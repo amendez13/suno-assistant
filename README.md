@@ -78,11 +78,23 @@ Or use a structured YAML request:
 python -m suno_assistant.main --request examples/song-request.yaml
 ```
 
+Fill the create box without submitting a generation:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --fill-only \
+  --prompt "A warm original acoustic pop song about writing a careful checklist before launch."
+```
+
 The current request-aware path validates the song request before browser startup
 and runs the bounded generation plan after the saved Suno session is verified.
 The MVP generation path fills supported fields, submits once, waits within a
 bounded timeout for visible results or known blocked states, and records a
-Suno-specific evidence events in the active GSV evidence sink. It does not
+Suno-specific evidence events in the active GSV evidence sink. `--fill-only`
+stops after populating supported fields and never clicks create/generate. It does not
 download audio files or bypass Suno quotas, moderation, CAPTCHA, MFA, or other
 platform controls.
 

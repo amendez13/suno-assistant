@@ -85,6 +85,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Run the headed manual Suno login bootstrap and persist local browser storage state.",
     )
+    parser.add_argument(
+        "--fill-only",
+        action="store_true",
+        help="Fill a validated song request into the create page without clicking create/generate.",
+    )
     request_group = parser.add_mutually_exclusive_group()
     request_group.add_argument("--request", type=Path, help="Path to a YAML song request file.")
     request_group.add_argument("--prompt", help="One-line original song prompt for a quick request.")
@@ -179,6 +184,7 @@ async def run_create_visit(
     keep_open: bool = False,
     login: bool = False,
     song_request: SongRequest | None = None,
+    fill_only: bool = False,
 ) -> VisitResult:
     """Run a single Suno create-page visit through the gsv runtime."""
     resolved = load_runtime_config(config_path, headed=headed)
@@ -211,7 +217,7 @@ async def run_create_visit(
             rng=random.Random(),
             recorder=recorder,
         )
-        visit_result = await VisitRunner(visit_ctx).run(build_create_plan(song_request=song_request))
+        visit_result = await VisitRunner(visit_ctx).run(build_create_plan(song_request=song_request, fill_only=fill_only))
         if keep_open:
             await keep_browser_open(page)
         return visit_result
@@ -243,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("Invalid song request", extra={"event": "song_request_invalid", "error": str(exc)})
         print(f"Invalid song request: {exc}", file=sys.stderr)
         return 2
+    if args.fill_only and song_request is None:
+        print("Invalid fill-only request: use --prompt or --request with --fill-only.", file=sys.stderr)
+        return 2
 
     result = asyncio.run(
         run_create_visit(
@@ -251,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             keep_open=args.keep_open,
             login=args.login,
             song_request=song_request,
+            fill_only=args.fill_only,
         )
     )
     print(f"Run {result.outcome}: {describe_project().site_name}")
