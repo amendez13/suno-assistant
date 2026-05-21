@@ -22,6 +22,10 @@ The template ships:
   - Guides turning rough requests into implementation-ready GitHub issues and includes a helper for mockup screenshot uploads.
 - `suno-assistant-session-notes`
   - Documents the committed session-notes workflow used by this repository.
+- `suno-assistant-song-generation`
+  - Guides iterative song prompting from a user's brief through request YAML,
+    fill-only preview or live Create submission, evidence review, and safe
+    artist-reference translation.
 
 Use `suno-assistant-example-skill` as the smallest starting point and the other shipped skills as fuller reference implementations.
 
