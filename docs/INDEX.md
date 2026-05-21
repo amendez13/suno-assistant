@@ -46,6 +46,11 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Create-page UI behavior from the operator point of view
 - Basic and Advanced request-to-control mapping, More Options handling, slider behavior, and unsupported controls
 
+**[SONG_LINKS.md](SONG_LINKS.md)**
+- Generated-song link export command
+- JSON, JSONL, and Markdown output formats
+- Metadata-only scope and auth behavior
+
 **[AI_SKILLS.md](AI_SKILLS.md)**
 - Canonical AI skills source tree
 - Dual deployment to Claude and Codex
@@ -147,6 +152,10 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Headed fill-only create-box inspection
 - Advanced mode, More Options, title, Weirdness, and Style Influence behavior
 
+**[SONG_LINKS.md](SONG_LINKS.md)**
+- Authenticated generated-song link collection
+- File output for project tracking without downloading audio
+
 **[OBSERVABILITY.md](OBSERVABILITY.md)**
 - Health endpoint, logging, and Loki query guidance
 - systemd naming and session-artifact conventions
@@ -173,6 +182,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Suno create-page selector and fixture-backed extractor layer wired
 - Request-aware bounded generation plan wired
 - Generation evidence and review artifacts wired
+- Generated-song link collection and file export wired
 
 **Next Phase:** Live smoke and operations hardening
 - Run the headed manual smoke checklist with the operator's own account
@@ -202,6 +212,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 | [SETUP.md](SETUP.md) | Environment configuration | All users |
 | [MANUAL_SMOKE.md](MANUAL_SMOKE.md) | Headed login, live smoke checks, artifact review | Operators, developers |
 | [CREATE_BOX.md](CREATE_BOX.md) | Create UI behavior and Advanced control mapping | Operators, developers |
+| [SONG_LINKS.md](SONG_LINKS.md) | Generated-song link export workflow | Operators, developers |
 | [AI_SKILLS.md](AI_SKILLS.md) | AI skill source, deploy, and starter-skill guide | Developers |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture and design | Developers |
 | [CI.md](CI.md) | CI/CD pipeline and development workflow | Developers |

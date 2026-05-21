@@ -1,5 +1,7 @@
 """Tests for the Suno create-page visit plan."""
 
+from pathlib import Path
+
 from gsv.apps import get_app
 
 from tests.module_loader import import_source_module
@@ -66,6 +68,20 @@ class TestSunoVisitPlan:
             "fill_suno_request",
         ]
         assert plan.outcome_classifier is visit_module.classify_generation_outcome
+
+    def test_build_song_collection_plan_exports_links(self) -> None:
+        """The song-link plan should navigate to the library and collect links."""
+        output_path = Path("song-links.json")
+
+        plan = visit_module.build_song_collection_plan(output_path=output_path)
+
+        assert [step.name for step in plan.steps] == [
+            "navigate_song_links_source",
+            "collect_generated_song_links",
+        ]
+        assert plan.steps[0].url == visit_module.SUNO_LIBRARY_URL
+        assert plan.steps[1].output_path == output_path
+        assert plan.outcome_classifier is visit_module.classify_song_collection_outcome
 
     def test_visit_module_registers_suno_app(self) -> None:
         """Importing the module should register the Suno plan factory."""

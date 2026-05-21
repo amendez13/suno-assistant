@@ -440,6 +440,74 @@ class TestProjectSummary:
         assert captured.out == "summary from test\n"
         assert "use --prompt or --request with --fill-only" in captured.err
 
+    def test_main_passes_collect_songs_options(
+        self, monkeypatch, capsys, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """The CLI should run the song-link collection path when requested."""
+
+        output_path = tmp_path / "songs.md"
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_song_collection_visit(
+            config_path: Path,
+            *,
+            output_path: Path,
+            output_format=None,
+            source_url: str,
+            headed: bool = False,
+            keep_open: bool = False,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert output_path.name == "songs.md"
+            assert output_format == "markdown"
+            assert source_url == "https://suno.com/library"
+            assert headed is True
+            assert keep_open is True
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={"suno.song_links_collected": 2},
+                extracted={},
+                step_results=[StepResult(name="collect_generated_song_links", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_song_collection_visit", fake_run_song_collection_visit)
+
+        exit_code = main_module.main(
+            [
+                "--headed",
+                "--keep-open",
+                "--collect-songs",
+                str(output_path),
+                "--songs-format",
+                "markdown",
+            ]
+        )
+
+        assert exit_code == 0
+        assert capsys.readouterr().out == f"summary from test\nCollected 2 song link(s): {output_path}\nRun completed: suno\n"
+
+    def test_main_rejects_collect_songs_with_generation_request(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """Song-link collection is a separate mode from create-page generation."""
+
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_song_collection_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--collect-songs", str(tmp_path / "songs.json"), "--prompt", "A song"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "use --collect-songs without --login, --fill-only, --prompt, or --request" in captured.err
+
     def test_main_rejects_invalid_prompt_before_browser_start(
         self, monkeypatch, capsys
     ) -> None:  # type: ignore[no-untyped-def]
@@ -699,6 +767,62 @@ class TestProjectSummary:
 
         assert result is fake_result
         assert ("keep_open", "page") in events
+        assert "save_session" in events
+
+    def test_run_song_collection_visit_uses_collection_plan(self, monkeypatch, tmp_path: Path) -> None:
+        """Song-link collection should build its own bounded visit plan."""
+
+        fake_result = VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"suno.song_links_collected": 2},
+            extracted={},
+            step_results=[StepResult(name="collect_generated_song_links", outcome="ok")],
+        )
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeVisitRunner.result = fake_result
+        FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        FakeSession.login_authenticated = True
+        output_path = tmp_path / "songs.json"
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
+        monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
+        monkeypatch.setattr(
+            main_module,
+            "build_song_collection_plan",
+            lambda output_path, output_format=None, source_url="": f"song-links-plan:{output_path.name}:{source_url}",
+        )
+
+        result = main_module.asyncio.run(
+            main_module.run_song_collection_visit(
+                Path("config/config.yaml"),
+                output_path=output_path,
+                source_url="https://suno.com/library",
+            )
+        )
+
+        assert result is fake_result
+        assert "session_start" in events
+        assert "start_tracing" in events
+        assert "enable_har_for_session" in events
+        assert ("plan", "song-links-plan:songs.json:https://suno.com/library") in events
         assert "save_session" in events
 
 
