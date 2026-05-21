@@ -20,6 +20,7 @@ def test_authenticated_create_url_classifier_rejects_auth_pages() -> None:
 
 def test_manual_auth_url_classifier_detects_login_and_challenges() -> None:
     """Manual login and verification URLs should be handled by headed challenge policy."""
+    assert is_manual_auth_url("https://suno.com/")
     assert is_manual_auth_url("https://suno.com/sign-in")
     assert is_manual_auth_url("https://suno.com/checkpoint")
     assert is_manual_auth_url("https://accounts.google.com/o/oauth2/v2/auth")

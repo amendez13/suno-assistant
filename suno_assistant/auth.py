@@ -67,7 +67,10 @@ def is_manual_auth_url(url: str) -> bool:
 
     parsed = urlparse(url)
     host = parsed.netloc.lower()
+    path = parsed.path.rstrip("/") or "/"
     lowered = f"{host}{parsed.path}".casefold()
+    if host in SUNO_HOSTS and path == "/":
+        return True
     if any(marker in lowered for marker in _CHALLENGE_MARKERS):
         return True
     if host in SUNO_HOSTS and any(marker in lowered for marker in _AUTH_PATH_MARKERS):
