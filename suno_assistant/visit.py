@@ -10,9 +10,11 @@ from gsv.visit.steps import Navigate
 
 from .requests import SongRequest
 from .song_links import SongLinkFormat
+from .song_renames import SongRenameRequest
 from .steps import (
     CollectGeneratedSongLinks,
     FillSunoRequest,
+    RenameGeneratedSongs,
     SelectAdvancedMode,
     SubmitGeneration,
     VerifyCreatePageFillable,
@@ -20,6 +22,7 @@ from .steps import (
     WaitForGenerationResult,
     classify_generation_outcome,
     classify_song_collection_outcome,
+    classify_song_rename_outcome,
 )
 
 SUNO_CREATE_URL = "https://suno.com/create"
@@ -77,6 +80,24 @@ def build_song_collection_plan(
     )
 
 
+def build_song_rename_plan(
+    *,
+    renames: list[SongRenameRequest],
+    output_path: Path,
+) -> VisitPlan:
+    """Build a bounded plan that renames generated songs."""
+
+    return VisitPlan(
+        steps=[
+            RenameGeneratedSongs(
+                renames=renames,
+                output_path=output_path,
+            ),
+        ],
+        outcome_classifier=classify_song_rename_outcome,
+    )
+
+
 register_app("suno", build_plan)
 
-__all__ = ["SUNO_CREATE_URL", "SUNO_LIBRARY_URL", "build_plan", "build_song_collection_plan"]
+__all__ = ["SUNO_CREATE_URL", "SUNO_LIBRARY_URL", "build_plan", "build_song_collection_plan", "build_song_rename_plan"]

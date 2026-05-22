@@ -11,6 +11,7 @@ from typing import Any
 from .extractors import CreatePageState, SongResultSummary
 from .requests import SongRequest
 from .song_links import GeneratedSongLink
+from .song_renames import SongRenameResult
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,29 @@ def song_links_failed_payload(*, phase: str, error: str, source_url: str) -> dic
         "source_url": source_url,
         "phase": phase,
         "error": error,
+        "recorded_at": _now_iso(),
+    }
+
+
+def song_renames_completed_payload(*, results: list[SongRenameResult], output_path: str) -> dict[str, Any]:
+    """Build the song_renames_completed evidence payload."""
+
+    return {
+        "output_path": output_path,
+        "result_count": len(results),
+        "results": [asdict(result) for result in results],
+        "recorded_at": _now_iso(),
+    }
+
+
+def song_renames_failed_payload(*, phase: str, error: str, results: list[SongRenameResult]) -> dict[str, Any]:
+    """Build the song_renames_failed evidence payload."""
+
+    return {
+        "phase": phase,
+        "error": error,
+        "result_count": len(results),
+        "results": [asdict(result) for result in results],
         "recorded_at": _now_iso(),
     }
 

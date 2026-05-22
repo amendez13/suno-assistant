@@ -19,11 +19,14 @@ from .evidence import (
     request_loaded_payload,
     song_links_collected_payload,
     song_links_failed_payload,
+    song_renames_completed_payload,
+    song_renames_failed_payload,
 )
 from .extractors import CreatePageState, extract_create_page_state
 from .requests import SongRequest
 from .selectors import (
     ADVANCED_TAB_SELECTORS,
+    AUTH_REQUIRED_SELECTORS,
     AUTO_STYLE_MODE_SELECTORS,
     CREATE_BUTTON_SELECTORS,
     CUSTOM_MODE_SELECTORS,
@@ -35,12 +38,17 @@ from .selectors import (
     MANUAL_STYLE_MODE_SELECTORS,
     MORE_OPTIONS_SELECTORS,
     PROMPT_INPUT_SELECTORS,
+    SONG_MORE_MENU_SELECTORS,
+    SONG_TITLE_EDIT_SELECTORS,
+    SONG_TITLE_INPUT_SELECTORS,
+    SONG_TITLE_SAVE_SELECTORS,
     STYLE_INFLUENCE_SLIDER_SELECTORS,
     STYLE_INPUT_SELECTORS,
     TITLE_INPUT_SELECTORS,
     WEIRDNESS_SLIDER_SELECTORS,
 )
 from .song_links import SongLinkFormat, extract_song_links_page_state, write_song_links_file
+from .song_renames import SongRenameRequest, SongRenameResult, write_song_rename_results_file
 
 
 @dataclass
@@ -353,6 +361,56 @@ class CollectGeneratedSongLinks:
             await asyncio.sleep(max(0.0, self.poll_interval_seconds))
 
 
+@dataclass
+class RenameGeneratedSongs:
+    """Rename generated songs through normal visible Suno song-page controls."""
+
+    renames: list[SongRenameRequest]
+    output_path: Path
+    name: str = "rename_generated_songs"
+    content_marker: str | None = None
+    skip_runner_burst_tick: bool = True
+
+    async def execute(self, ctx: VisitContext) -> StepResult:
+        """Visit each song URL, update its title, and write a result report."""
+
+        results: list[SongRenameResult] = []
+        for rename in self.renames:
+            result = await _rename_generated_song(ctx, rename)
+            results.append(result)
+            if result.outcome == "renamed":
+                ctx.increment("suno.song_titles_renamed")
+            else:
+                ctx.increment("suno.song_title_renames_failed")
+
+        export = write_song_rename_results_file(self.output_path, results)
+        ctx.extracted["song_rename_results"] = results
+        ctx.extracted["song_rename_output_path"] = str(self.output_path)
+        failed = [result for result in results if result.outcome == "failed"]
+        if failed:
+            error = f"{len(failed)} song rename(s) failed"
+            await ctx.sink.write(
+                "song_renames_failed",
+                song_renames_failed_payload(phase=self.name, error=error, results=results),
+            )
+            return StepResult(
+                name=self.name,
+                outcome="fail",
+                error=error,
+                extracted={"output_path": str(self.output_path), "result_count": export.count},
+            )
+
+        await ctx.sink.write(
+            "song_renames_completed",
+            song_renames_completed_payload(results=results, output_path=str(self.output_path)),
+        )
+        return StepResult(
+            name=self.name,
+            outcome="ok",
+            extracted={"output_path": str(self.output_path), "result_count": export.count},
+        )
+
+
 def classify_generation_outcome(step_results: list[StepResult]) -> VisitOutcome:
     """Classify generation outcomes with known platform blocks separated."""
     for result in step_results:
@@ -366,6 +424,18 @@ def classify_generation_outcome(step_results: list[StepResult]) -> VisitOutcome:
 
 def classify_song_collection_outcome(step_results: list[StepResult]) -> VisitOutcome:
     """Classify song-link collection outcomes with auth blocks separated."""
+
+    for result in step_results:
+        if result.outcome != "fail":
+            continue
+        if result.error and result.error.startswith("blocked:"):
+            return "blocked"
+        return "failed"
+    return "completed"
+
+
+def classify_song_rename_outcome(step_results: list[StepResult]) -> VisitOutcome:
+    """Classify generated-song rename outcomes."""
 
     for result in step_results:
         if result.outcome != "fail":
@@ -400,6 +470,74 @@ async def _click_first_available(page: Any, selectors: tuple[str, ...]) -> bool:
 
 async def _click_optional(page: Any, selectors: tuple[str, ...]) -> None:
     await _click_first_available(page, selectors)
+
+
+async def _rename_generated_song(ctx: VisitContext, rename: SongRenameRequest) -> SongRenameResult:
+    try:
+        await ctx.page.goto(rename.url, wait_until="domcontentloaded")
+        await _wait_for_song_page_interactive(ctx)
+        if await _selector_group_visible(ctx.page, AUTH_REQUIRED_SELECTORS.selectors):
+            return SongRenameResult(
+                url=rename.url, requested_title=rename.title, outcome="failed", error="blocked:auth_required"
+            )
+        if not await _open_song_title_editor(ctx):
+            return SongRenameResult(
+                url=rename.url,
+                requested_title=rename.title,
+                outcome="failed",
+                error="Song title edit control not found",
+            )
+        if not await _fill_first_available(ctx.page, SONG_TITLE_INPUT_SELECTORS.selectors, rename.title):
+            return SongRenameResult(
+                url=rename.url,
+                requested_title=rename.title,
+                outcome="failed",
+                error="Song title input selector not found",
+            )
+        await _gentle_action_pause(ctx)
+        saved = await _click_first_available(ctx.page, SONG_TITLE_SAVE_SELECTORS.selectors)
+        if not saved:
+            await ctx.page.keyboard.press("Enter")
+        await _gentle_action_pause(ctx)
+        return SongRenameResult(url=rename.url, requested_title=rename.title, outcome="renamed")
+    except Exception as exc:  # noqa: BLE001 - visit steps must serialize unexpected UI/runtime errors.
+        return SongRenameResult(url=rename.url, requested_title=rename.title, outcome="failed", error=str(exc))
+
+
+async def _open_song_title_editor(ctx: VisitContext) -> bool:
+    if await _selector_group_visible(ctx.page, SONG_TITLE_INPUT_SELECTORS.selectors):
+        return True
+    if await _click_first_available(ctx.page, SONG_TITLE_EDIT_SELECTORS.selectors):
+        await _gentle_action_pause(ctx)
+        if await _selector_group_visible(ctx.page, SONG_TITLE_INPUT_SELECTORS.selectors):
+            return True
+    if await _click_first_available(ctx.page, SONG_MORE_MENU_SELECTORS.selectors):
+        await _gentle_action_pause(ctx)
+        if await _click_first_available(ctx.page, SONG_TITLE_EDIT_SELECTORS.selectors):
+            await _gentle_action_pause(ctx)
+            return True
+    return await _selector_group_visible(ctx.page, SONG_TITLE_INPUT_SELECTORS.selectors)
+
+
+async def _wait_for_song_page_interactive(ctx: VisitContext, timeout_seconds: float = 20.0) -> None:
+    try:
+        await ctx.page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception:
+        pass
+
+    if getattr(ctx, "_skip_gentle_pause", False):
+        return
+
+    deadline = time.monotonic() + max(0.1, timeout_seconds)
+    while time.monotonic() < deadline:
+        if (
+            await _selector_group_visible(ctx.page, SONG_TITLE_INPUT_SELECTORS.selectors)
+            or await _selector_group_visible(ctx.page, SONG_TITLE_EDIT_SELECTORS.selectors)
+            or await _selector_group_visible(ctx.page, SONG_MORE_MENU_SELECTORS.selectors)
+            or await _selector_group_visible(ctx.page, AUTH_REQUIRED_SELECTORS.selectors)
+        ):
+            return
+        await asyncio.sleep(1.0)
 
 
 async def _fill_advanced_primary_text_fields(ctx: VisitContext, request: SongRequest) -> str | None:

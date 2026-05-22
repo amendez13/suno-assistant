@@ -128,6 +128,49 @@ CREATE_BUTTON_SELECTORS = SelectorGroup(
         "button[aria-label*='generate' i]",
     ),
 )
+SONG_MORE_MENU_SELECTORS = SelectorGroup(
+    name="song_more_menu",
+    selectors=(
+        "button[aria-label*='more' i]",
+        "button[aria-label*='menu' i]",
+        "button[title*='more' i]",
+        "button:has-text('...')",
+        "button:has-text('⋯')",
+    ),
+)
+SONG_TITLE_EDIT_SELECTORS = SelectorGroup(
+    name="song_title_edit",
+    selectors=(
+        "button[aria-label*='edit' i]",
+        "button[title*='edit' i]",
+        "button:has-text('Edit')",
+        "[role='menuitem']:has-text('Edit')",
+        "[role='menuitem']:has-text('Rename')",
+        "button:has-text('Rename')",
+        "button:has-text('Edit details')",
+    ),
+)
+SONG_TITLE_INPUT_SELECTORS = SelectorGroup(
+    name="song_title_input",
+    selectors=(
+        "input[placeholder*='title' i]",
+        "input[aria-label*='title' i]",
+        "textarea[placeholder*='title' i]",
+        "textarea[aria-label*='title' i]",
+        "[contenteditable='true'][aria-label*='title' i]",
+        "[contenteditable='true'][data-placeholder*='title' i]",
+    ),
+)
+SONG_TITLE_SAVE_SELECTORS = SelectorGroup(
+    name="song_title_save",
+    selectors=(
+        "button:has-text('Save')",
+        "button:has-text('Done')",
+        "button:has-text('Update')",
+        "button[aria-label*='save' i]",
+        "button[aria-label*='done' i]",
+    ),
+)
 GENERATION_PROGRESS_SELECTORS = SelectorGroup(
     name="generation_progress",
     selectors=(
@@ -171,6 +214,10 @@ CREATE_WORKFLOW_SELECTOR_GROUPS = (
     WEIRDNESS_SLIDER_SELECTORS,
     STYLE_INFLUENCE_SLIDER_SELECTORS,
     CREATE_BUTTON_SELECTORS,
+    SONG_MORE_MENU_SELECTORS,
+    SONG_TITLE_EDIT_SELECTORS,
+    SONG_TITLE_INPUT_SELECTORS,
+    SONG_TITLE_SAVE_SELECTORS,
     GENERATION_PROGRESS_SELECTORS,
     RESULT_CARD_SELECTORS,
     BLOCKED_STATE_SELECTORS,

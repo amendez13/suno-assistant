@@ -83,6 +83,18 @@ class TestSunoVisitPlan:
         assert plan.steps[1].output_path == output_path
         assert plan.outcome_classifier is visit_module.classify_song_collection_outcome
 
+    def test_build_song_rename_plan_renames_titles(self) -> None:
+        """The song-rename plan should expose a bounded rename step."""
+        output_path = Path("song-renames.json")
+        renames = [visit_module.SongRenameRequest(url="https://suno.com/song/song_abc", title="Song v1-b")]
+
+        plan = visit_module.build_song_rename_plan(renames=renames, output_path=output_path)
+
+        assert [step.name for step in plan.steps] == ["rename_generated_songs"]
+        assert plan.steps[0].renames == renames
+        assert plan.steps[0].output_path == output_path
+        assert plan.outcome_classifier is visit_module.classify_song_rename_outcome
+
     def test_visit_module_registers_suno_app(self) -> None:
         """Importing the module should register the Suno plan factory."""
         assert get_app("suno") is visit_module.build_plan

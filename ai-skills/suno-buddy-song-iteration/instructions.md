@@ -133,14 +133,23 @@ controls.
 8. Disambiguate duplicate generated titles when possible.
    - Suno usually creates two songs from one submitted request, and both start
      with the same requested title.
-   - After collecting links, if both newest outputs have the same title, try to
-     rename at least one visible output when the Suno UI or available tooling
-     exposes a normal title-edit action. Use suffixes such as
-     `<Base Title> -v<N>-a` and `<Base Title> -v<N>-b`, or leave the first as
-     `<Base Title> -v<N>` and rename the second `<Base Title> -v<N>-b`.
-   - If no supported rename action is available, do not hack around Suno or use
-     unsupported requests. Record the duplicate title state and the desired
-     rename in the output note.
+   - After collecting links, if both newest outputs have the same title, create
+     a JSON rename plan in the Suno Assistant repo and rename at least the
+     second output. Prefer leaving the first as `<Base Title> -v<N>` and
+     renaming the second to `<Base Title> -v<N>-b`.
+   - Run:
+     ```bash
+     cd /Users/alex3m6/Dropbox/projects/suno-assistant
+     venv/bin/python -m suno_assistant.main \
+       --config config/config.yaml \
+       --headed \
+       --rename-songs data/song-renames/<project>-<NNN>-rename.json \
+       --rename-results data/song-renames/<project>-<NNN>-rename-results.json
+     ```
+   - Verify by collecting links again from `https://suno.com/create`.
+   - If the supported rename action fails, do not hack around Suno or use
+     unsupported requests. Record the duplicate title state, attempted rename,
+     and result JSON in the output note.
 
 ## Output Notes
 

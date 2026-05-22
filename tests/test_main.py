@@ -506,7 +506,79 @@ class TestProjectSummary:
         captured = capsys.readouterr()
         assert exit_code == 2
         assert captured.out == "summary from test\n"
-        assert "use --collect-songs without --login, --fill-only, --prompt, or --request" in captured.err
+        assert "use --collect-songs without --login, --fill-only, --prompt, --request, or --rename-songs" in captured.err
+
+    def test_main_passes_rename_songs_options(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """The CLI should run the generated-song rename path when requested."""
+
+        plan_path = tmp_path / "renames.json"
+        result_path = tmp_path / "rename-results.json"
+        plan_path.write_text(
+            '{"renames": [{"url": "https://suno.com/song/song_abc", "title": "Song v1-b"}]}\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_song_rename_visit(
+            config_path: Path,
+            *,
+            renames,
+            output_path: Path,
+            headed: bool = False,
+            keep_open: bool = False,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert renames[0].url == "https://suno.com/song/song_abc"
+            assert renames[0].title == "Song v1-b"
+            assert output_path == result_path
+            assert headed is True
+            assert keep_open is False
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={"suno.song_titles_renamed": 1},
+                extracted={},
+                step_results=[StepResult(name="rename_generated_songs", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_song_rename_visit", fake_run_song_rename_visit)
+
+        exit_code = main_module.main(
+            [
+                "--headed",
+                "--rename-songs",
+                str(plan_path),
+                "--rename-results",
+                str(result_path),
+            ]
+        )
+
+        assert exit_code == 0
+        assert (
+            capsys.readouterr().out
+            == f"summary from test\nRenamed 1 song title(s), 0 failed: {result_path}\nRun completed: suno\n"
+        )
+
+    def test_main_rejects_rename_songs_with_generation_request(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """Generated-song renaming is a separate mode from create-page generation."""
+
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_song_rename_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--rename-songs", str(tmp_path / "renames.json"), "--prompt", "A song"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "use --rename-songs without --login, --fill-only, --prompt, or --request" in captured.err
 
     def test_main_rejects_invalid_prompt_before_browser_start(
         self, monkeypatch, capsys
@@ -823,6 +895,63 @@ class TestProjectSummary:
         assert "start_tracing" in events
         assert "enable_har_for_session" in events
         assert ("plan", "song-links-plan:songs.json:https://suno.com/library") in events
+        assert "save_session" in events
+
+    def test_run_song_rename_visit_uses_rename_plan(self, monkeypatch, tmp_path: Path) -> None:
+        """Song-title renaming should build its own bounded visit plan."""
+
+        fake_result = VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"suno.song_titles_renamed": 1},
+            extracted={},
+            step_results=[StepResult(name="rename_generated_songs", outcome="ok")],
+        )
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeVisitRunner.result = fake_result
+        FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        FakeSession.login_authenticated = True
+        output_path = tmp_path / "rename-results.json"
+        renames = [main_module.SongRenameRequest(url="https://suno.com/song/song_abc", title="Song v1-b")]
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
+        monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
+        monkeypatch.setattr(
+            main_module,
+            "build_song_rename_plan",
+            lambda renames, output_path: f"song-rename-plan:{len(renames)}:{output_path.name}",
+        )
+
+        result = main_module.asyncio.run(
+            main_module.run_song_rename_visit(
+                Path("config/config.yaml"),
+                renames=renames,
+                output_path=output_path,
+            )
+        )
+
+        assert result is fake_result
+        assert "session_start" in events
+        assert "start_tracing" in events
+        assert "enable_har_for_session" in events
+        assert ("plan", "song-rename-plan:1:rename-results.json") in events
         assert "save_session" in events
 
 

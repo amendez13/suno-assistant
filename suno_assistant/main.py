@@ -27,9 +27,10 @@ from .logging_config import configure_logging
 from .release_info import get_release_info
 from .requests import SongRequest, SongRequestError, load_song_request
 from .song_links import SongLinkFormat
+from .song_renames import SongRenameRequest, load_song_rename_requests
 from .visit import SUNO_LIBRARY_URL
 from .visit import build_plan as build_create_plan
-from .visit import build_song_collection_plan
+from .visit import build_song_collection_plan, build_song_rename_plan
 
 LOGGER = logging.getLogger(__name__)
 
@@ -109,6 +110,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("json", "jsonl", "markdown"),
         default=None,
         help="Output format for --collect-songs. Defaults to the output file extension.",
+    )
+    parser.add_argument(
+        "--rename-songs",
+        type=Path,
+        metavar="PLAN",
+        help="Rename generated songs from a JSON plan containing URL/title pairs.",
+    )
+    parser.add_argument(
+        "--rename-results",
+        type=Path,
+        metavar="OUTPUT",
+        help="Write generated-song rename results to OUTPUT. Defaults beside the rename plan.",
     )
     request_group = parser.add_mutually_exclusive_group()
     request_group.add_argument("--request", type=Path, help="Path to a YAML song request file.")
@@ -299,6 +312,115 @@ async def run_song_collection_visit(
         await browser.close()
 
 
+async def run_song_rename_visit(
+    config_path: Path,
+    *,
+    renames: list[SongRenameRequest],
+    output_path: Path,
+    headed: bool = False,
+    keep_open: bool = False,
+) -> VisitResult:
+    """Run a bounded generated-song rename visit through the gsv runtime."""
+
+    resolved = load_runtime_config(config_path, headed=headed)
+    browser = BrowserManager(resolved.visitor, resolved.site, rng=random.Random())
+    recorder = open_session_recorder(resolved.visitor, resolved.site, browser)
+    session = Session(browser, build_suno_auth_adapter(resolved.site), resolved.visitor, rng=random.Random())
+    visit_result: VisitResult | None = None
+
+    try:
+        browser.attach_recorder(recorder)
+        authenticated = await session.start()
+        if not authenticated:
+            visit_result = build_auth_required_result()
+            return visit_result
+        await browser.enable_har_for_session()
+        await browser.start_tracing()
+        page = await browser.new_page()
+        pacing = build_pacing(resolved.visitor, resolved.site, browser.rate_limiter, rng=random.Random())
+        visit_ctx = VisitContext(
+            page=page,
+            pacing=pacing,
+            config=resolved.visitor,
+            site=resolved.site,
+            rng=random.Random(),
+            recorder=recorder,
+        )
+        plan = build_song_rename_plan(renames=renames, output_path=output_path)
+        visit_result = await VisitRunner(visit_ctx).run(plan)
+        if keep_open:
+            await keep_browser_open(page)
+        return visit_result
+    finally:
+        if session.is_authenticated:
+            await browser.save_session()
+        await finalize_recording(browser, recorder, visit_result)
+        await browser.close()
+
+
+def _run_song_collection_mode(args: argparse.Namespace) -> int:
+    if _collect_songs_conflicts(args):
+        print(
+            "Invalid song collection request: use --collect-songs without "
+            "--login, --fill-only, --prompt, --request, or --rename-songs.",
+            file=sys.stderr,
+        )
+        return 2
+    result = asyncio.run(
+        run_song_collection_visit(
+            args.config,
+            output_path=args.collect_songs,
+            output_format=args.songs_format,
+            source_url=args.songs_url,
+            headed=args.headed,
+            keep_open=args.keep_open,
+        )
+    )
+    count = result.counters.get("suno.song_links_collected", 0)
+    print(f"Collected {count} song link(s): {args.collect_songs}")
+    print(f"Run {result.outcome}: {describe_project().site_name}")
+    return 0 if result.outcome == "completed" else 1
+
+
+def _run_song_rename_mode(args: argparse.Namespace) -> int:
+    if _rename_songs_conflicts(args):
+        print(
+            "Invalid song rename request: use --rename-songs without --login, --fill-only, --prompt, or --request.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        renames = load_song_rename_requests(args.rename_songs)
+    except (OSError, ValueError) as exc:
+        print(f"Invalid song rename plan: {exc}", file=sys.stderr)
+        return 2
+    output_path = args.rename_results or args.rename_songs.with_name(f"{args.rename_songs.stem}.results.json")
+    result = asyncio.run(
+        run_song_rename_visit(
+            args.config,
+            renames=renames,
+            output_path=output_path,
+            headed=args.headed,
+            keep_open=args.keep_open,
+        )
+    )
+    renamed = result.counters.get("suno.song_titles_renamed", 0)
+    failed = result.counters.get("suno.song_title_renames_failed", 0)
+    print(f"Renamed {renamed} song title(s), {failed} failed: {output_path}")
+    print(f"Run {result.outcome}: {describe_project().site_name}")
+    return 0 if result.outcome == "completed" else 1
+
+
+def _collect_songs_conflicts(args: argparse.Namespace) -> bool:
+    return bool(
+        args.login or args.fill_only or args.request is not None or args.prompt is not None or args.rename_songs is not None
+    )
+
+
+def _rename_songs_conflicts(args: argparse.Namespace) -> bool:
+    return bool(args.login or args.fill_only or args.request is not None or args.prompt is not None)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the local CLI."""
     args = parse_args(argv)
@@ -314,27 +436,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.login and not args.headed:
         print("Invalid login request: use --headed --login for manual Suno login bootstrap.", file=sys.stderr)
         return 2
+    if args.rename_results is not None and args.rename_songs is None:
+        print("Invalid song rename request: use --rename-results together with --rename-songs.", file=sys.stderr)
+        return 2
     if args.collect_songs is not None:
-        if args.login or args.fill_only or args.request is not None or args.prompt is not None:
-            print(
-                "Invalid song collection request: use --collect-songs without --login, --fill-only, --prompt, or --request.",
-                file=sys.stderr,
-            )
-            return 2
-        result = asyncio.run(
-            run_song_collection_visit(
-                args.config,
-                output_path=args.collect_songs,
-                output_format=args.songs_format,
-                source_url=args.songs_url,
-                headed=args.headed,
-                keep_open=args.keep_open,
-            )
-        )
-        count = result.counters.get("suno.song_links_collected", 0)
-        print(f"Collected {count} song link(s): {args.collect_songs}")
-        print(f"Run {result.outcome}: {describe_project().site_name}")
-        return 0 if result.outcome == "completed" else 1
+        return _run_song_collection_mode(args)
+    if args.rename_songs is not None:
+        return _run_song_rename_mode(args)
     try:
         song_request = resolve_song_request(args)
     except SongRequestError as exc:

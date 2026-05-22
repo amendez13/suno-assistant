@@ -18,14 +18,20 @@ from suno_assistant.selectors import (
     MANUAL_STYLE_MODE_SELECTORS,
     MORE_OPTIONS_SELECTORS,
     PROMPT_INPUT_SELECTORS,
+    SONG_MORE_MENU_SELECTORS,
+    SONG_TITLE_EDIT_SELECTORS,
+    SONG_TITLE_INPUT_SELECTORS,
+    SONG_TITLE_SAVE_SELECTORS,
     STYLE_INFLUENCE_SLIDER_SELECTORS,
     STYLE_INPUT_SELECTORS,
     TITLE_INPUT_SELECTORS,
     WEIRDNESS_SLIDER_SELECTORS,
 )
+from suno_assistant.song_renames import SongRenameRequest
 from suno_assistant.steps import (
     CollectGeneratedSongLinks,
     FillSunoRequest,
+    RenameGeneratedSongs,
     SelectAdvancedMode,
     SubmitGeneration,
     VerifyCreatePageFillable,
@@ -35,6 +41,7 @@ from suno_assistant.steps import (
     _first_locator,
     classify_generation_outcome,
     classify_song_collection_outcome,
+    classify_song_rename_outcome,
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "suno"
@@ -131,6 +138,7 @@ class FakePage:
         self.clicks: list[str] = []
         self.focuses: list[str] = []
         self.mouse_clicks: list[tuple[float, float]] = []
+        self.gotos: list[str] = []
         self.mouse = SimpleNamespace(click=self._mouse_click)
         self.keyboard_presses: list[str] = []
         self.keyboard = SimpleNamespace(press=self._keyboard_press)
@@ -142,6 +150,10 @@ class FakePage:
 
     def locator(self, selector: str) -> FakeLocator:
         return FakeLocator(self, selector)
+
+    async def goto(self, url: str, wait_until: str = "load") -> None:
+        del wait_until
+        self.gotos.append(url)
 
     async def _mouse_click(self, x: float, y: float) -> None:
         self.mouse_clicks.append((x, y))
@@ -613,3 +625,45 @@ def test_collect_generated_song_links_blocks_unauthenticated_page(tmp_path: Path
     assert ctx.sink.events[0][0] == "song_links_failed"
     assert not output_path.exists()
     assert classify_song_collection_outcome([result]) == "blocked"
+
+
+def test_rename_generated_songs_updates_titles_and_writes_results(tmp_path: Path) -> None:
+    """The rename step should visit song pages, edit titles, save, and write a report."""
+
+    output_path = tmp_path / "rename-results.json"
+    selectors = {
+        SONG_MORE_MENU_SELECTORS.selectors[0],
+        SONG_TITLE_EDIT_SELECTORS.selectors[0],
+        SONG_TITLE_INPUT_SELECTORS.selectors[0],
+        SONG_TITLE_SAVE_SELECTORS.selectors[0],
+    }
+    ctx = make_ctx(FakePage(["library_with_songs.html"], selectors=selectors))
+    renames = [SongRenameRequest(url="https://suno.com/song/song_abc", title="Jonathan Edwards -v1-b")]
+
+    result = asyncio.run(RenameGeneratedSongs(renames=renames, output_path=output_path).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert ctx.counters == {"suno.song_titles_renamed": 1}
+    assert ctx.page.gotos == ["https://suno.com/song/song_abc"]
+    assert ctx.page.clicks == [SONG_TITLE_SAVE_SELECTORS.selectors[0]]
+    assert ctx.page.fills == [(SONG_TITLE_INPUT_SELECTORS.selectors[0], "Jonathan Edwards -v1-b")]
+    assert ctx.sink.events[0][0] == "song_renames_completed"
+    assert output_path.exists()
+    assert classify_song_rename_outcome([result]) == "completed"
+
+
+def test_rename_generated_songs_reports_missing_edit_control(tmp_path: Path) -> None:
+    """Missing rename controls should produce a failed result file."""
+
+    output_path = tmp_path / "rename-results.json"
+    ctx = make_ctx(FakePage(["library_with_songs.html"]))
+    renames = [SongRenameRequest(url="https://suno.com/song/song_abc", title="New Title")]
+
+    result = asyncio.run(RenameGeneratedSongs(renames=renames, output_path=output_path).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "1 song rename(s) failed"
+    assert ctx.counters == {"suno.song_title_renames_failed": 1}
+    assert ctx.sink.events[0][0] == "song_renames_failed"
+    assert output_path.exists()
+    assert classify_song_rename_outcome([result]) == "failed"
