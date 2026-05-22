@@ -1,8 +1,9 @@
 # Suno Buddy Song Iteration
 
-Use this skill for end-to-end Suno Buddy iteration work: one song run, many
-request versions, live Suno submission through Suno Assistant, output-note
-capture, and tracker deployment.
+Use this skill for end-to-end Suno Buddy song work: selecting the next source
+poem, proposing a style, creating one song run with many request versions, live
+Suno submission through Suno Assistant, output-note capture, title cleanup, and
+tracker deployment.
 
 Also use `suno-assistant-song-generation` when changing request content or
 running Suno Assistant; it contains the lower-level create workflow and
@@ -27,6 +28,40 @@ git status --short --branch
 
 Do not stage or commit Suno Assistant `data/` artifacts. Only summarize their
 paths and extracted links in Suno Buddy output notes.
+
+## Borges Source Workflow
+
+Use this when the user asks what poem is next, asks for a song-style proposal,
+or says to start the next Borges workflow.
+
+1. Determine progress from Suno Buddy requests, not memory.
+   - Inspect `components/suno_buddy/projects/borges/requests/*.yaml`.
+   - Read `poem-<N>` tags and request titles to find the highest completed
+     poem number.
+   - Cross-check the next poem in `/Users/alex3m6/Dropbox/projects/borges`.
+     Prefer `Borges-el-otro-el-mismo/<NNN>_*/README.md` for the poem text, and
+     use `borges_el_otro_el_mismo_poemas.md` for the ordered list.
+
+2. When answering “what is next,” give the poem number, title, and poem text.
+   Keep it factual and do not start a request file unless the user asks to
+   begin the workflow.
+
+3. When proposing a style, make one strong primary recommendation plus a short
+   rationale grounded in the poem’s images and argument. Avoid obvious default
+   treatments when the poem suggests a more interesting musical frame.
+   - Translate any named artist or song reference into generic traits.
+   - Keep the style proposal Suno-friendly: genre/era, vocal character,
+     instrumentation, energy/tempo, mix texture, and a rough structure.
+   - If the user asks for an unexpected direction, move farther from the
+     literal subject while preserving the poem’s emotional logic.
+
+4. When the user says “do it,” create the next numbered request and run the
+   standard iteration workflow below.
+   - For a new base poem/song, use `title: "<Base Title> -v1"`.
+   - Add `poem-<N>`, a stable base-title tag, style tags, slider tags, and a
+     note that records both the base title and Suno-facing versioned title.
+   - Use `components/suno_buddy/docs/suno_prompting_best_practices.md` when
+     shaping lyrics and style prompts if it exists locally.
 
 ## Iteration Workflow
 
