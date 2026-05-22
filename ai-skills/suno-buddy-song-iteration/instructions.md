@@ -33,6 +33,14 @@ paths and extracted links in Suno Buddy output notes.
 1. Identify the active project and latest request.
    - List `requests/` and use the highest numeric prefix.
    - Create the next request as `<NNN>-<slug>.yaml`.
+   - Use a versioned Suno-facing `title` for every submitted generation:
+     `<Base Title> -v<N>`.
+   - Increment `<N>` per base song within the project, ignoring the global
+     request number. For a new song, start at `-v1`; for another iteration of
+     an existing song, inspect prior request titles and use the next version.
+   - Preserve the stable base title in `tags` and `notes` so the tracker and
+     final report can still identify the underlying song even when the Suno
+     title is versioned.
    - Preserve parameters unless the user explicitly changes them.
    - For the Borges/Snorri run, current defaults have been `weirdness: 80`,
      `style_influence: 50`, `count: 1`, Advanced mode, male vocal.
@@ -122,6 +130,18 @@ PY
 Do not download audio or bypass auth, CAPTCHA, billing, moderation, or quota
 controls.
 
+8. Disambiguate duplicate generated titles when possible.
+   - Suno usually creates two songs from one submitted request, and both start
+     with the same requested title.
+   - After collecting links, if both newest outputs have the same title, try to
+     rename at least one visible output when the Suno UI or available tooling
+     exposes a normal title-edit action. Use suffixes such as
+     `<Base Title> -v<N>-a` and `<Base Title> -v<N>-b`, or leave the first as
+     `<Base Title> -v<N>` and rename the second `<Base Title> -v<N>-b`.
+   - If no supported rename action is available, do not hack around Suno or use
+     unsupported requests. Record the duplicate title state and the desired
+     rename in the output note.
+
 ## Output Notes
 
 Create one Markdown note under `outputs/` for every submitted request:
@@ -137,6 +157,8 @@ Include:
 - generation session path, evidence file, video file, and screenshot path
 - song-link collector output file and collector session
 - first two newest visible Suno links, when available
+- generated titles as collected, plus any successful rename or desired rename
+  when duplicate titles could not be changed
 - outcome that separates automation classification from visible results
 - note that no audio files were downloaded
 
@@ -187,8 +209,10 @@ top and the output note is attached.
 In the final response, include:
 
 - the new request filename and the exact requested change
+- the versioned Suno title used for this generation
 - whether Suno Assistant submitted once
 - the two newest Suno links, if collected
+- whether duplicate generated titles were renamed or only noted
 - any blocked classifier result, separated from visible outputs
 - test result, commit hash, and deployment status when applicable
 
