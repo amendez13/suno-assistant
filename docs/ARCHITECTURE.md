@@ -128,11 +128,17 @@ observability mechanics.
    song-listing page, extracts visible song-card titles and links, normalizes
    Suno URLs, and writes JSON, JSONL, or Markdown output without downloading
    media.
-12. Suno Assistant builds a request-aware or song-link collection GSV `VisitPlan`.
-13. GSV executes the plan through browser/session/pacing/observability layers.
-14. Suno Assistant writes request, submit, completed, blocked, failed, or
-   `song_links_collected` evidence rows.
-15. Operators review evidence rows and run artifacts from the local GSV session bundle.
+12. With `--download-songs`, Suno Assistant navigates to a playlist, song-list,
+   or single-song source URL, resolves song URLs, then visits each song page
+   and uses visible `More -> Download` controls to save MP3 and/or WAV when the
+   account is allowed to do so.
+13. Suno Assistant builds a request-aware, song-link collection, song-download,
+   or song-rename GSV `VisitPlan`.
+14. GSV executes the plan through browser/session/pacing/observability layers.
+15. Suno Assistant writes request, submit, completed, blocked, failed,
+   `song_links_collected`, `song_downloads_completed`, or
+   `song_downloads_failed` evidence rows.
+16. Operators review evidence rows and run artifacts from the local GSV session bundle.
 
 ## Design Decisions
 
@@ -223,16 +229,17 @@ timeout for either visible result cards or known blocked states.
 - Pro: One CLI invocation has an explicit submit boundary and bounded wait.
 - Pro: Known platform blocks classify as `blocked` instead of false success.
 - Pro: Step tests can use fake pages and offline fixtures before live smoke.
-- Con: Batch submission, downloads, and durable evidence schema are deferred.
+- Con: Batch submission remains deferred outside the explicit playlist/song download path.
 
 ### Decision 7: Store Reviewable Local Evidence, Not Media
 
 **Context**: Operators need to understand what was requested and what Suno
 reported without replaying the browser session.
 
-**Decision**: Write structured JSONL events for request loading, submit attempts,
-terminal blocked/failed/completed states, and visible result metadata. Do not
-download audio files or store cookies/storage state in evidence.
+**Decision**: Write structured JSONL events for request loading, submit
+attempts, terminal blocked/failed/completed states, visible result metadata,
+and local audio-download result paths. Do not store cookies/storage state in
+evidence.
 
 **Consequences**:
 - Pro: Each submit attempt has a traceable local record.

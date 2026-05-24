@@ -9,10 +9,12 @@ from gsv.visit import VisitContext, VisitPlan
 from gsv.visit.steps import Navigate
 
 from .requests import SongRequest
+from .song_downloads import SongDownloadFormat
 from .song_links import SongLinkFormat
 from .song_renames import SongRenameRequest
 from .steps import (
     CollectGeneratedSongLinks,
+    DownloadGeneratedSongs,
     FillSunoRequest,
     RenameGeneratedSongs,
     SelectAdvancedMode,
@@ -22,6 +24,7 @@ from .steps import (
     WaitForGenerationResult,
     classify_generation_outcome,
     classify_song_collection_outcome,
+    classify_song_download_outcome,
     classify_song_rename_outcome,
 )
 
@@ -98,6 +101,39 @@ def build_song_rename_plan(
     )
 
 
+def build_song_download_plan(
+    *,
+    source_url: str,
+    output_dir: Path,
+    output_path: Path,
+    download_formats: tuple[SongDownloadFormat, ...],
+) -> VisitPlan:
+    """Build a bounded plan that downloads generated-song audio files."""
+
+    return VisitPlan(
+        steps=[
+            Navigate(
+                url=source_url,
+                name="navigate_song_download_source",
+            ),
+            DownloadGeneratedSongs(
+                source_url=source_url,
+                output_dir=output_dir,
+                output_path=output_path,
+                download_formats=download_formats,
+            ),
+        ],
+        outcome_classifier=classify_song_download_outcome,
+    )
+
+
 register_app("suno", build_plan)
 
-__all__ = ["SUNO_CREATE_URL", "SUNO_LIBRARY_URL", "build_plan", "build_song_collection_plan", "build_song_rename_plan"]
+__all__ = [
+    "SUNO_CREATE_URL",
+    "SUNO_LIBRARY_URL",
+    "build_plan",
+    "build_song_collection_plan",
+    "build_song_download_plan",
+    "build_song_rename_plan",
+]

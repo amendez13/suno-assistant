@@ -5,9 +5,11 @@ from suno_assistant.evidence import (
     generation_completed_payload,
     generation_submitted_payload,
     request_loaded_payload,
+    song_downloads_completed_payload,
 )
 from suno_assistant.extractors import CreatePageState, SongResultSummary
 from suno_assistant.requests import SongRequest
+from suno_assistant.song_downloads import SongDownloadResult
 
 
 def test_request_identity_is_stable_for_same_request() -> None:
@@ -79,3 +81,30 @@ def test_generation_completed_payload_keeps_visible_metadata_only() -> None:
     assert payload["results"][0] == {"title": "Evidence Song", "url": "/song/abc", "result_id": "abc"}
     assert payload["results"][1] == {"title": "No URL Yet", "url": None, "result_id": "def"}
     assert payload["page_state"]["result_count"] == 2
+
+
+def test_song_downloads_completed_payload_keeps_result_metadata() -> None:
+    """Download evidence should summarize requested formats and local output paths."""
+
+    payload = song_downloads_completed_payload(
+        source_url="https://suno.com/playlist/example",
+        output_dir="/tmp/audio",
+        output_path="/tmp/audio/song-downloads.json",
+        requested_formats=["mp3", "wav"],
+        results=[
+            SongDownloadResult(
+                url="https://suno.com/song/song_abc",
+                title="Camden, 1892 -v1",
+                song_id="song_abc",
+                download_format="mp3",
+                outcome="downloaded",
+                output_path="/tmp/audio/Camden, 1892 -v1.mp3",
+                suggested_filename="Camden, 1892 -v1.mp3",
+            )
+        ],
+    )
+
+    assert payload["source_url"] == "https://suno.com/playlist/example"
+    assert payload["requested_formats"] == ["mp3", "wav"]
+    assert payload["results"][0]["download_format"] == "mp3"
+    assert payload["results"][0]["output_path"] == "/tmp/audio/Camden, 1892 -v1.mp3"

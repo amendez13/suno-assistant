@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 SongLinkFormat = Literal["json", "jsonl", "markdown"]
 
@@ -173,6 +173,8 @@ def _extract_song_links(elements: list[_Element], *, base_url: str) -> list[Gene
 
 def _song_from_element(element: _Element, *, base_url: str) -> GeneratedSongLink | None:
     href = element.attrs.get("href")
+    if _is_comment_href(href):
+        return None
     song_id = element.attrs.get("data-song-id") or element.attrs.get("data-result-id") or _song_id_from_href(href)
     looks_like_song_card = _looks_like_song_card(element)
     looks_like_song_href = bool(href and any(marker in href for marker in _SONG_HREF_MARKERS))
@@ -196,7 +198,8 @@ def _looks_like_song_card(element: _Element) -> bool:
 
 def _song_url(*, href: str | None, song_id: str | None, base_url: str) -> str | None:
     if href and any(marker in href for marker in _SONG_HREF_MARKERS):
-        return urljoin(base_url, href)
+        parsed = urlparse(urljoin(base_url, href))
+        return parsed._replace(query="", fragment="").geturl()
     if song_id:
         return urljoin(base_url, f"/song/{song_id}")
     return None
@@ -216,12 +219,21 @@ def _song_title(element: _Element) -> str | None:
 def _song_id_from_href(href: str | None) -> str | None:
     if not href:
         return None
-    parts = [part for part in href.rstrip("/").split("/") if part]
+    parsed = urlparse(href)
+    parts = [part for part in parsed.path.rstrip("/").split("/") if part]
     if not parts:
         return None
     if parts[-2:-1] in (["song"], ["songs"]):
         return parts[-1]
     return None
+
+
+def _is_comment_href(href: str | None) -> bool:
+    if not href:
+        return False
+    parsed = urlparse(href)
+    query = parse_qs(parsed.query)
+    return any(value.casefold() == "true" for value in query.get("show_comments", []))
 
 
 def _clean_text(value: str) -> str:

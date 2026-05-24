@@ -156,6 +156,10 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Authenticated generated-song link collection
 - File output for project tracking without downloading audio
 
+**[SONG_DOWNLOADS.md](SONG_DOWNLOADS.md)**
+- Authenticated playlist and single-song audio download workflow
+- MP3/WAV result reporting and plan-gating behavior
+
 **[OBSERVABILITY.md](OBSERVABILITY.md)**
 - Health endpoint, logging, and Loki query guidance
 - systemd naming and session-artifact conventions
@@ -183,6 +187,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Request-aware bounded generation plan wired
 - Generation evidence and review artifacts wired
 - Generated-song link collection and file export wired
+- Generated-song audio download workflow wired
 
 **Next Phase:** Live smoke and operations hardening
 - Run the headed manual smoke checklist with the operator's own account
@@ -213,6 +218,7 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 | [MANUAL_SMOKE.md](MANUAL_SMOKE.md) | Headed login, live smoke checks, artifact review | Operators, developers |
 | [CREATE_BOX.md](CREATE_BOX.md) | Create UI behavior and Advanced control mapping | Operators, developers |
 | [SONG_LINKS.md](SONG_LINKS.md) | Generated-song link export workflow | Operators, developers |
+| [SONG_DOWNLOADS.md](SONG_DOWNLOADS.md) | Playlist and single-song audio download workflow | Operators, developers |
 | [AI_SKILLS.md](AI_SKILLS.md) | AI skill source, deploy, and starter-skill guide | Developers |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture and design | Developers |
 | [CI.md](CI.md) | CI/CD pipeline and development workflow | Developers |

@@ -95,6 +95,29 @@ class TestSunoVisitPlan:
         assert plan.steps[0].output_path == output_path
         assert plan.outcome_classifier is visit_module.classify_song_rename_outcome
 
+    def test_build_song_download_plan_downloads_audio(self) -> None:
+        """The song-download plan should navigate to the source and expose one bounded download step."""
+
+        output_dir = Path("downloads")
+        output_path = output_dir / "song-downloads.json"
+
+        plan = visit_module.build_song_download_plan(
+            source_url="https://suno.com/playlist/example",
+            output_dir=output_dir,
+            output_path=output_path,
+            download_formats=("mp3", "wav"),
+        )
+
+        assert [step.name for step in plan.steps] == [
+            "navigate_song_download_source",
+            "download_generated_songs",
+        ]
+        assert plan.steps[0].url == "https://suno.com/playlist/example"
+        assert plan.steps[1].output_dir == output_dir
+        assert plan.steps[1].output_path == output_path
+        assert plan.steps[1].download_formats == ("mp3", "wav")
+        assert plan.outcome_classifier is visit_module.classify_song_download_outcome
+
     def test_visit_module_registers_suno_app(self) -> None:
         """Importing the module should register the Suno plan factory."""
         assert get_app("suno") is visit_module.build_plan

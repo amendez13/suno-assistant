@@ -138,6 +138,33 @@ SONG_MORE_MENU_SELECTORS = SelectorGroup(
         "button:has-text('⋯')",
     ),
 )
+SONG_DOWNLOAD_ACTION_SELECTORS = SelectorGroup(
+    name="song_download_action",
+    selectors=(
+        "button[aria-label='Download']",
+        "[role='menuitem'][aria-label='Download']",
+        "button:has-text('Download')",
+        "[role='menuitem']:has-text('Download')",
+    ),
+)
+SONG_DOWNLOAD_MP3_SELECTORS = SelectorGroup(
+    name="song_download_mp3",
+    selectors=(
+        "button[aria-label='MP3 Audio']",
+        "[role='menuitem'][aria-label='MP3 Audio']",
+        "button:has-text('MP3 Audio')",
+        "[role='menuitem']:has-text('MP3 Audio')",
+    ),
+)
+SONG_DOWNLOAD_WAV_SELECTORS = SelectorGroup(
+    name="song_download_wav",
+    selectors=(
+        "button[aria-label='WAV Audio']",
+        "[role='menuitem'][aria-label='WAV Audio']",
+        "button:has-text('WAV Audio')",
+        "[role='menuitem']:has-text('WAV Audio')",
+    ),
+)
 SONG_TITLE_EDIT_SELECTORS = SelectorGroup(
     name="song_title_edit",
     selectors=(
@@ -215,6 +242,9 @@ CREATE_WORKFLOW_SELECTOR_GROUPS = (
     STYLE_INFLUENCE_SLIDER_SELECTORS,
     CREATE_BUTTON_SELECTORS,
     SONG_MORE_MENU_SELECTORS,
+    SONG_DOWNLOAD_ACTION_SELECTORS,
+    SONG_DOWNLOAD_MP3_SELECTORS,
+    SONG_DOWNLOAD_WAV_SELECTORS,
     SONG_TITLE_EDIT_SELECTORS,
     SONG_TITLE_INPUT_SELECTORS,
     SONG_TITLE_SAVE_SELECTORS,

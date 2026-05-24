@@ -580,6 +580,82 @@ class TestProjectSummary:
         assert captured.out == "summary from test\n"
         assert "use --rename-songs without --login, --fill-only, --prompt, or --request" in captured.err
 
+    def test_main_passes_download_songs_options(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """The CLI should run the generated-song audio download path when requested."""
+
+        output_dir = tmp_path / "audio"
+        result_path = output_dir / "song-downloads.json"
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_song_download_visit(
+            config_path: Path,
+            *,
+            source_url: str,
+            output_dir: Path,
+            output_path: Path,
+            download_formats,
+            headed: bool = False,
+            keep_open: bool = False,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert source_url == "https://suno.com/playlist/example"
+            assert output_dir.name == "audio"
+            assert output_path == result_path
+            assert download_formats == ("mp3", "wav")
+            assert headed is True
+            assert keep_open is False
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={"suno.song_audio_downloaded": 4},
+                extracted={},
+                step_results=[StepResult(name="download_generated_songs", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_song_download_visit", fake_run_song_download_visit)
+
+        exit_code = main_module.main(
+            [
+                "--headed",
+                "--download-songs",
+                str(output_dir),
+                "--songs-url",
+                "https://suno.com/playlist/example",
+                "--download-formats",
+                "both",
+            ]
+        )
+
+        assert exit_code == 0
+        assert (
+            capsys.readouterr().out
+            == f"summary from test\nDownloaded 4 audio file(s), 0 blocked, 0 failed: {result_path}\nRun completed: suno\n"
+        )
+
+    def test_main_rejects_download_songs_with_generation_request(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """Audio downloading is a separate mode from create-page generation."""
+
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_song_download_visit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--download-songs", str(tmp_path / "audio"), "--prompt", "A song"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert (
+            "use --download-songs without --login, --fill-only, --prompt, --request, --collect-songs, or --rename-songs"
+            in captured.err
+        )
+
     def test_main_rejects_invalid_prompt_before_browser_start(
         self, monkeypatch, capsys
     ) -> None:  # type: ignore[no-untyped-def]

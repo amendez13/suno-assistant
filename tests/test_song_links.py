@@ -44,6 +44,23 @@ def test_classifies_unauthenticated_song_links_page() -> None:
     assert state.songs == []
 
 
+def test_ignores_show_comments_song_links_and_keeps_canonical_song_url() -> None:
+    """Comment-panel song links should not create duplicate download targets."""
+
+    html = """
+    <div class="song-row">
+      <a href="/song/song_abc" title="Closet Full of Sunshine">Closet Full of Sunshine</a>
+      <a href="/song/song_abc?show_comments=true" aria-label="Comment">Comment</a>
+    </div>
+    """
+
+    state = classify_song_links_html(html, base_url="https://suno.com")
+
+    assert [song.title for song in state.songs] == ["Closet Full of Sunshine"]
+    assert [song.url for song in state.songs] == ["https://suno.com/song/song_abc"]
+    assert [song.song_id for song in state.songs] == ["song_abc"]
+
+
 def test_write_song_links_file_defaults_to_json(tmp_path: Path) -> None:
     """JSON exports should include source metadata and generated links."""
 

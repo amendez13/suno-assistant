@@ -7,9 +7,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from gsv.visit import VisitContext
 from gsv.visit.plan import StepResult, VisitOutcome
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .evidence import (
     generation_blocked_payload,
@@ -17,6 +19,8 @@ from .evidence import (
     generation_failed_payload,
     generation_submitted_payload,
     request_loaded_payload,
+    song_downloads_completed_payload,
+    song_downloads_failed_payload,
     song_links_collected_payload,
     song_links_failed_payload,
     song_renames_completed_payload,
@@ -38,6 +42,9 @@ from .selectors import (
     MANUAL_STYLE_MODE_SELECTORS,
     MORE_OPTIONS_SELECTORS,
     PROMPT_INPUT_SELECTORS,
+    SONG_DOWNLOAD_ACTION_SELECTORS,
+    SONG_DOWNLOAD_MP3_SELECTORS,
+    SONG_DOWNLOAD_WAV_SELECTORS,
     SONG_MORE_MENU_SELECTORS,
     SONG_TITLE_EDIT_SELECTORS,
     SONG_TITLE_INPUT_SELECTORS,
@@ -47,7 +54,13 @@ from .selectors import (
     TITLE_INPUT_SELECTORS,
     WEIRDNESS_SLIDER_SELECTORS,
 )
-from .song_links import SongLinkFormat, extract_song_links_page_state, write_song_links_file
+from .song_downloads import (
+    SongDownloadFormat,
+    SongDownloadResult,
+    normalize_downloaded_song_results,
+    write_song_download_results_file,
+)
+from .song_links import GeneratedSongLink, SongLinkFormat, extract_song_links_page_state, write_song_links_file
 from .song_renames import SongRenameRequest, SongRenameResult, write_song_rename_results_file
 
 
@@ -362,6 +375,99 @@ class CollectGeneratedSongLinks:
 
 
 @dataclass
+class DownloadGeneratedSongs:
+    """Download MP3 and/or WAV audio from a playlist page or a single song page."""
+
+    source_url: str
+    output_dir: Path
+    output_path: Path
+    download_formats: tuple[SongDownloadFormat, ...]
+    name: str = "download_generated_songs"
+    content_marker: str | None = None
+    skip_runner_burst_tick: bool = True
+
+    async def execute(self, ctx: VisitContext) -> StepResult:
+        """Resolve song targets, download requested audio files, and write a report."""
+
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        targets = await _resolve_song_download_targets(ctx, self.source_url)
+        if isinstance(targets, StepResult):
+            return targets
+
+        results: list[SongDownloadResult] = []
+        for song in targets:
+            song_results = await _download_generated_song_audio(
+                ctx,
+                song=song,
+                output_dir=self.output_dir,
+                formats=self.download_formats,
+            )
+            results.extend(song_results)
+            for result in song_results:
+                if result.outcome == "downloaded":
+                    ctx.increment("suno.song_audio_downloaded")
+                elif result.outcome == "blocked":
+                    ctx.increment("suno.song_audio_downloads_blocked")
+                else:
+                    ctx.increment("suno.song_audio_downloads_failed")
+
+        results = normalize_downloaded_song_results(results)
+        export = write_song_download_results_file(
+            self.output_path,
+            results,
+            source_url=self.source_url,
+            output_dir=self.output_dir,
+            requested_formats=self.download_formats,
+        )
+        ctx.extracted["song_download_results"] = results
+        ctx.extracted["song_download_output_path"] = str(self.output_path)
+
+        blocked = [result for result in results if result.outcome == "blocked"]
+        failed = [result for result in results if result.outcome == "failed"]
+        if blocked or failed:
+            summary_parts: list[str] = []
+            if blocked:
+                summary_parts.append(f"{len(blocked)} blocked")
+            if failed:
+                summary_parts.append(f"{len(failed)} failed")
+            error = ", ".join(summary_parts) + " song audio download(s)"
+            await ctx.sink.write(
+                "song_downloads_failed",
+                song_downloads_failed_payload(
+                    phase=self.name,
+                    error=error,
+                    source_url=self.source_url,
+                    output_dir=str(self.output_dir),
+                    output_path=str(self.output_path),
+                    requested_formats=list(self.download_formats),
+                    results=results,
+                ),
+            )
+            return StepResult(
+                name=self.name,
+                outcome="fail",
+                error=error,
+                extracted={"output_path": str(self.output_path), "result_count": export.count},
+            )
+
+        await ctx.sink.write(
+            "song_downloads_completed",
+            song_downloads_completed_payload(
+                source_url=self.source_url,
+                output_dir=str(self.output_dir),
+                output_path=str(self.output_path),
+                requested_formats=list(self.download_formats),
+                results=results,
+            ),
+        )
+        return StepResult(
+            name=self.name,
+            outcome="ok",
+            extracted={"output_path": str(self.output_path), "result_count": export.count},
+        )
+
+
+@dataclass
 class RenameGeneratedSongs:
     """Rename generated songs through normal visible Suno song-page controls."""
 
@@ -434,6 +540,18 @@ def classify_song_collection_outcome(step_results: list[StepResult]) -> VisitOut
     return "completed"
 
 
+def classify_song_download_outcome(step_results: list[StepResult]) -> VisitOutcome:
+    """Classify generated-song audio download outcomes."""
+
+    for result in step_results:
+        if result.outcome != "fail":
+            continue
+        if result.error and "blocked" in result.error:
+            return "blocked"
+        return "failed"
+    return "completed"
+
+
 def classify_song_rename_outcome(step_results: list[StepResult]) -> VisitOutcome:
     """Classify generated-song rename outcomes."""
 
@@ -470,6 +588,159 @@ async def _click_first_available(page: Any, selectors: tuple[str, ...]) -> bool:
 
 async def _click_optional(page: Any, selectors: tuple[str, ...]) -> None:
     await _click_first_available(page, selectors)
+
+
+async def _resolve_song_download_targets(ctx: VisitContext, source_url: str) -> list[GeneratedSongLink] | StepResult:
+    direct_song = _generated_song_link_from_url(source_url)
+    if direct_song is not None:
+        return [direct_song]
+
+    state = await extract_song_links_page_state(ctx.page, base_url=source_url)
+    ctx.extracted["song_links_page_state"] = state
+    if state.blocked_reason is not None:
+        ctx.increment("suno.song_downloads_blocked")
+        await ctx.sink.write(
+            "song_downloads_failed",
+            song_downloads_failed_payload(
+                phase="resolve_song_download_targets",
+                error=f"blocked:{state.blocked_reason}",
+                source_url=source_url,
+                output_dir="",
+                output_path="",
+                requested_formats=[],
+                results=[],
+            ),
+        )
+        return StepResult(name="resolve_song_download_targets", outcome="fail", error=f"blocked:{state.blocked_reason}")
+    return state.songs
+
+
+async def _download_generated_song_audio(
+    ctx: VisitContext,
+    *,
+    song: GeneratedSongLink,
+    output_dir: Path,
+    formats: tuple[SongDownloadFormat, ...],
+) -> list[SongDownloadResult]:
+    results: list[SongDownloadResult] = []
+    for download_format in formats:
+        result = await _download_generated_song_format(ctx, song=song, output_dir=output_dir, download_format=download_format)
+        results.append(result)
+    return results
+
+
+async def _download_generated_song_format(
+    ctx: VisitContext,
+    *,
+    song: GeneratedSongLink,
+    output_dir: Path,
+    download_format: SongDownloadFormat,
+) -> SongDownloadResult:
+    try:
+        await ctx.page.goto(song.url, wait_until="domcontentloaded")
+        await _wait_for_song_page_interactive(ctx)
+        if await _selector_group_visible(ctx.page, AUTH_REQUIRED_SELECTORS.selectors):
+            return SongDownloadResult(
+                url=song.url,
+                title=song.title,
+                song_id=song.song_id,
+                download_format=download_format,
+                outcome="blocked",
+                error="blocked:auth_required",
+            )
+        if not await _open_song_download_menu(ctx):
+            return SongDownloadResult(
+                url=song.url,
+                title=song.title,
+                song_id=song.song_id,
+                download_format=download_format,
+                outcome="failed",
+                error="Song download menu not found",
+            )
+        target = await _first_visible_selector(
+            ctx.page,
+            SONG_DOWNLOAD_MP3_SELECTORS.selectors if download_format == "mp3" else SONG_DOWNLOAD_WAV_SELECTORS.selectors,
+        )
+        if target is None:
+            return SongDownloadResult(
+                url=song.url,
+                title=song.title,
+                song_id=song.song_id,
+                download_format=download_format,
+                outcome="failed",
+                error=f"{download_format.upper()} download action not found",
+            )
+
+        label_text = await _locator_text(target)
+        try:
+            async with ctx.page.expect_download(timeout=10_000) as download_info:
+                await target.click()
+            download = await download_info.value
+            output_path = _unique_download_output_path(
+                output_dir=output_dir,
+                suggested_filename=download.suggested_filename,
+                song_id=song.song_id,
+            )
+            await download.save_as(str(output_path))
+            return SongDownloadResult(
+                url=song.url,
+                title=song.title or output_path.stem,
+                song_id=song.song_id,
+                download_format=download_format,
+                outcome="downloaded",
+                output_path=str(output_path),
+                suggested_filename=download.suggested_filename,
+            )
+        except PlaywrightTimeoutError:
+            error = _download_timeout_reason(download_format=download_format, button_text=label_text)
+            return SongDownloadResult(
+                url=song.url,
+                title=song.title,
+                song_id=song.song_id,
+                download_format=download_format,
+                outcome="blocked" if error.startswith("blocked:") else "failed",
+                error=error,
+            )
+    except Exception as exc:  # noqa: BLE001 - visit steps must serialize unexpected UI/runtime errors.
+        return SongDownloadResult(
+            url=song.url,
+            title=song.title,
+            song_id=song.song_id,
+            download_format=download_format,
+            outcome="failed",
+            error=str(exc),
+        )
+
+
+async def _open_song_download_menu(ctx: VisitContext) -> bool:
+    for selector in SONG_MORE_MENU_SELECTORS.selectors:
+        locator = ctx.page.locator(selector)
+        count = int(await locator.count())
+        for index in range(count):
+            target = _locator_at(locator, index)
+            if not await target.is_visible():
+                continue
+            await target.click()
+            await _gentle_action_pause(ctx)
+            if await _selector_group_visible(ctx.page, SONG_DOWNLOAD_ACTION_SELECTORS.selectors):
+                clicked = await _click_first_available(ctx.page, SONG_DOWNLOAD_ACTION_SELECTORS.selectors)
+                if clicked:
+                    await _gentle_action_pause(ctx)
+                    return True
+            await _dismiss_song_overlay(ctx)
+    return False
+
+
+async def _dismiss_song_overlay(ctx: VisitContext) -> None:
+    try:
+        await ctx.page.keyboard.press("Escape")
+    except Exception:
+        pass
+    try:
+        await ctx.page.mouse.click(10, 10)
+    except Exception:
+        pass
+    await _gentle_action_pause(ctx)
 
 
 async def _rename_generated_song(ctx: VisitContext, rename: SongRenameRequest) -> SongRenameResult:
@@ -538,6 +809,68 @@ async def _wait_for_song_page_interactive(ctx: VisitContext, timeout_seconds: fl
         ):
             return
         await asyncio.sleep(1.0)
+
+
+async def _first_visible_selector(page: Any, selectors: tuple[str, ...]) -> Any | None:
+    for selector in selectors:
+        locator = page.locator(selector)
+        target = await _first_visible_locator(locator)
+        if target is not None:
+            return target
+    return None
+
+
+async def _locator_text(locator: Any) -> str | None:
+    inner_text = getattr(locator, "inner_text", None)
+    if callable(inner_text):
+        try:
+            value = await inner_text()
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        except Exception:
+            pass
+    text_content = getattr(locator, "text_content", None)
+    if callable(text_content):
+        try:
+            value = await text_content()
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        except Exception:
+            pass
+    return None
+
+
+def _generated_song_link_from_url(source_url: str) -> GeneratedSongLink | None:
+    parsed = urlparse(source_url)
+    parts = [part for part in parsed.path.rstrip("/").split("/") if part]
+    if len(parts) < 2 or parts[-2] not in {"song", "songs"}:
+        return None
+    song_id = parts[-1]
+    if not song_id:
+        return None
+    return GeneratedSongLink(title=None, url=source_url, song_id=song_id)
+
+
+def _unique_download_output_path(*, output_dir: Path, suggested_filename: str, song_id: str | None) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    candidate = output_dir / suggested_filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    suffix_id = (song_id or "copy")[:8]
+    candidate = output_dir / f"{stem} [{suffix_id}]{suffix}"
+    attempt = 2
+    while candidate.exists():
+        candidate = output_dir / f"{stem} [{suffix_id}-{attempt}]{suffix}"
+        attempt += 1
+    return candidate
+
+
+def _download_timeout_reason(*, download_format: SongDownloadFormat, button_text: str | None) -> str:
+    if button_text and "pro" in button_text.casefold():
+        return f"blocked:{download_format}_requires_pro"
+    return f"{download_format.upper()} download did not start"
 
 
 async def _fill_advanced_primary_text_fields(ctx: VisitContext, request: SongRequest) -> str | None:

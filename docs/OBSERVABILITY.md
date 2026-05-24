@@ -188,9 +188,9 @@ Manifest counters use Suno-specific names:
 - `suno.blocked_states_detected`
 - `suno.policy_blocks_detected`
 
-Evidence does not download audio files or store cookies/storage state, but it
-does include operator-supplied prompt text and visible result metadata. Treat
-`data/sessions/` as sensitive local run history.
+Evidence does not store cookies/storage state, but it can include
+operator-supplied prompt text, visible result metadata, and local audio
+download result paths. Treat `data/sessions/` as sensitive local run history.
 
 ### Artifact Review Checklist
 

@@ -26,11 +26,12 @@ from .auth import AUTH_REQUIRED_MESSAGE, build_suno_auth_adapter
 from .logging_config import configure_logging
 from .release_info import get_release_info
 from .requests import SongRequest, SongRequestError, load_song_request
+from .song_downloads import SongDownloadFormat, resolve_song_download_formats
 from .song_links import SongLinkFormat
 from .song_renames import SongRenameRequest, load_song_rename_requests
 from .visit import SUNO_LIBRARY_URL
 from .visit import build_plan as build_create_plan
-from .visit import build_song_collection_plan, build_song_rename_plan
+from .visit import build_song_collection_plan, build_song_download_plan, build_song_rename_plan
 
 LOGGER = logging.getLogger(__name__)
 
@@ -122,6 +123,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         metavar="OUTPUT",
         help="Write generated-song rename results to OUTPUT. Defaults beside the rename plan.",
+    )
+    parser.add_argument(
+        "--download-songs",
+        type=Path,
+        metavar="DIR",
+        help="Download MP3 and/or WAV audio from a Suno playlist page or single song into DIR.",
+    )
+    parser.add_argument(
+        "--download-formats",
+        choices=("mp3", "wav", "both"),
+        default="mp3",
+        help="Audio formats for --download-songs. Defaults to mp3.",
+    )
+    parser.add_argument(
+        "--download-results",
+        type=Path,
+        metavar="OUTPUT",
+        help="Write generated-song download results to OUTPUT. Defaults inside the download directory.",
     )
     request_group = parser.add_mutually_exclusive_group()
     request_group.add_argument("--request", type=Path, help="Path to a YAML song request file.")
@@ -358,6 +377,59 @@ async def run_song_rename_visit(
         await browser.close()
 
 
+async def run_song_download_visit(
+    config_path: Path,
+    *,
+    source_url: str,
+    output_dir: Path,
+    output_path: Path,
+    download_formats: tuple[SongDownloadFormat, ...],
+    headed: bool = False,
+    keep_open: bool = False,
+) -> VisitResult:
+    """Run a bounded generated-song audio download visit through the gsv runtime."""
+
+    resolved = load_runtime_config(config_path, headed=headed)
+    browser = BrowserManager(resolved.visitor, resolved.site, rng=random.Random())
+    recorder = open_session_recorder(resolved.visitor, resolved.site, browser)
+    session = Session(browser, build_suno_auth_adapter(resolved.site), resolved.visitor, rng=random.Random())
+    visit_result: VisitResult | None = None
+
+    try:
+        browser.attach_recorder(recorder)
+        authenticated = await session.start()
+        if not authenticated:
+            visit_result = build_auth_required_result()
+            return visit_result
+        await browser.enable_har_for_session()
+        await browser.start_tracing()
+        page = await browser.new_page()
+        pacing = build_pacing(resolved.visitor, resolved.site, browser.rate_limiter, rng=random.Random())
+        visit_ctx = VisitContext(
+            page=page,
+            pacing=pacing,
+            config=resolved.visitor,
+            site=resolved.site,
+            rng=random.Random(),
+            recorder=recorder,
+        )
+        plan = build_song_download_plan(
+            source_url=source_url,
+            output_dir=output_dir,
+            output_path=output_path,
+            download_formats=download_formats,
+        )
+        visit_result = await VisitRunner(visit_ctx).run(plan)
+        if keep_open:
+            await keep_browser_open(page)
+        return visit_result
+    finally:
+        if session.is_authenticated:
+            await browser.save_session()
+        await finalize_recording(browser, recorder, visit_result)
+        await browser.close()
+
+
 def _run_song_collection_mode(args: argparse.Namespace) -> int:
     if _collect_songs_conflicts(args):
         print(
@@ -411,17 +483,73 @@ def _run_song_rename_mode(args: argparse.Namespace) -> int:
     return 0 if result.outcome == "completed" else 1
 
 
+def _run_song_download_mode(args: argparse.Namespace) -> int:
+    if _download_songs_conflicts(args):
+        print(
+            "Invalid song download request: use --download-songs without --login, --fill-only, --prompt, "
+            "--request, --collect-songs, or --rename-songs.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        download_formats = resolve_song_download_formats(args.download_formats)
+    except ValueError as exc:
+        print(f"Invalid song download request: {exc}", file=sys.stderr)
+        return 2
+    output_path = args.download_results or args.download_songs / "song-downloads.json"
+    result = asyncio.run(
+        run_song_download_visit(
+            args.config,
+            source_url=args.songs_url,
+            output_dir=args.download_songs,
+            output_path=output_path,
+            download_formats=download_formats,
+            headed=args.headed,
+            keep_open=args.keep_open,
+        )
+    )
+    downloaded = result.counters.get("suno.song_audio_downloaded", 0)
+    blocked = result.counters.get("suno.song_audio_downloads_blocked", 0)
+    failed = result.counters.get("suno.song_audio_downloads_failed", 0)
+    print(f"Downloaded {downloaded} audio file(s), {blocked} blocked, {failed} failed: {output_path}")
+    print(f"Run {result.outcome}: {describe_project().site_name}")
+    return 0 if result.outcome == "completed" else 1
+
+
 def _collect_songs_conflicts(args: argparse.Namespace) -> bool:
     return bool(
-        args.login or args.fill_only or args.request is not None or args.prompt is not None or args.rename_songs is not None
+        args.login
+        or args.fill_only
+        or args.request is not None
+        or args.prompt is not None
+        or args.rename_songs is not None
+        or args.download_songs is not None
     )
 
 
 def _rename_songs_conflicts(args: argparse.Namespace) -> bool:
-    return bool(args.login or args.fill_only or args.request is not None or args.prompt is not None)
+    return bool(
+        args.login
+        or args.fill_only
+        or args.request is not None
+        or args.prompt is not None
+        or args.collect_songs is not None
+        or args.download_songs is not None
+    )
 
 
-def main(argv: list[str] | None = None) -> int:
+def _download_songs_conflicts(args: argparse.Namespace) -> bool:
+    return bool(
+        args.login
+        or args.fill_only
+        or args.request is not None
+        or args.prompt is not None
+        or args.collect_songs is not None
+        or args.rename_songs is not None
+    )
+
+
+def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatch is intentionally centralized here.
     """Run the local CLI."""
     args = parse_args(argv)
     configure_logging()
@@ -439,10 +567,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.rename_results is not None and args.rename_songs is None:
         print("Invalid song rename request: use --rename-results together with --rename-songs.", file=sys.stderr)
         return 2
+    if args.download_results is not None and args.download_songs is None:
+        print("Invalid song download request: use --download-results together with --download-songs.", file=sys.stderr)
+        return 2
     if args.collect_songs is not None:
         return _run_song_collection_mode(args)
     if args.rename_songs is not None:
         return _run_song_rename_mode(args)
+    if args.download_songs is not None:
+        return _run_song_download_mode(args)
     try:
         song_request = resolve_song_request(args)
     except SongRequestError as exc:

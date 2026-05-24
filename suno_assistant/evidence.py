@@ -10,6 +10,7 @@ from typing import Any
 
 from .extractors import CreatePageState, SongResultSummary
 from .requests import SongRequest
+from .song_downloads import SongDownloadFormat, SongDownloadResult
 from .song_links import GeneratedSongLink
 from .song_renames import SongRenameResult
 
@@ -184,6 +185,52 @@ def song_renames_failed_payload(*, phase: str, error: str, results: list[SongRen
     return {
         "phase": phase,
         "error": error,
+        "result_count": len(results),
+        "results": [asdict(result) for result in results],
+        "recorded_at": _now_iso(),
+    }
+
+
+def song_downloads_completed_payload(
+    *,
+    source_url: str,
+    output_dir: str,
+    output_path: str,
+    requested_formats: list[SongDownloadFormat],
+    results: list[SongDownloadResult],
+) -> dict[str, Any]:
+    """Build the song_downloads_completed evidence payload."""
+
+    return {
+        "source_url": source_url,
+        "output_dir": output_dir,
+        "output_path": output_path,
+        "requested_formats": list(requested_formats),
+        "result_count": len(results),
+        "results": [asdict(result) for result in results],
+        "recorded_at": _now_iso(),
+    }
+
+
+def song_downloads_failed_payload(
+    *,
+    phase: str,
+    error: str,
+    source_url: str,
+    output_dir: str,
+    output_path: str,
+    requested_formats: list[SongDownloadFormat],
+    results: list[SongDownloadResult],
+) -> dict[str, Any]:
+    """Build the song_downloads_failed evidence payload."""
+
+    return {
+        "phase": phase,
+        "error": error,
+        "source_url": source_url,
+        "output_dir": output_dir,
+        "output_path": output_path,
+        "requested_formats": list(requested_formats),
         "result_count": len(results),
         "results": [asdict(result) for result in results],
         "recorded_at": _now_iso(),

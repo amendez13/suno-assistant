@@ -106,9 +106,9 @@ and runs the bounded generation plan after the saved Suno session is verified.
 The MVP generation path fills supported fields, submits once, waits within a
 bounded timeout for visible results or known blocked states, and records a
 Suno-specific evidence events in the active GSV evidence sink. `--fill-only`
-stops after populating supported fields and never clicks create/generate. It does not
-download audio files or bypass Suno quotas, moderation, CAPTCHA, MFA, or other
-platform controls.
+stops after populating supported fields and never clicks create/generate. The
+create workflow itself does not download audio files or bypass Suno quotas,
+moderation, CAPTCHA, MFA, or other platform controls.
 
 Collect visible generated-song titles and links from the authenticated Suno
 library without downloading audio:
@@ -124,6 +124,24 @@ The collector writes JSON by default, JSONL for `.jsonl`, and Markdown for
 `.md` or `.markdown`. Use `--songs-url` to inspect another Suno page with
 visible song cards, such as `https://suno.com/create`, and `--songs-format` to
 set the format explicitly. See [docs/SONG_LINKS.md](docs/SONG_LINKS.md).
+
+Download MP3 and/or WAV audio from a Suno playlist page or a single song page:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --download-songs data/song-downloads \
+  --songs-url https://suno.com/playlist/<playlist-id> \
+  --download-formats both
+```
+
+The download workflow reuses the saved authenticated session, resolves song
+URLs from the playlist or single-song source, then visits each song page and
+uses Suno's visible `More -> Download` controls. It records a JSON result file
+beside the downloads and reports blocked formats, such as WAV on an ineligible
+plan, instead of retrying around account gating. See
+[docs/SONG_DOWNLOADS.md](docs/SONG_DOWNLOADS.md).
 
 To inspect the page manually in a visible browser and keep it open after the first navigation:
 
@@ -160,10 +178,11 @@ data/sessions/suno/<session-id>/evidence.jsonl
 ```
 
 Events include `request_loaded`, `generation_submitted`,
-`generation_completed`, `generation_blocked`, `generation_failed`, and
-`song_links_collected`. Evidence
-contains the explicit prompt and visible result metadata, so treat session
-artifacts as sensitive local files.
+`generation_completed`, `generation_blocked`, `generation_failed`,
+`song_links_collected`, `song_downloads_completed`, and
+`song_downloads_failed`. Evidence contains the explicit prompt, visible result
+metadata, and local download result paths, so treat session artifacts as
+sensitive local files.
 
 For the full operator checklist, including headed login bootstrap, bounded live
 smoke runs, evidence review, and artifact cleanup, see

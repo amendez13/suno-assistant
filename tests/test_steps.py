@@ -27,9 +27,12 @@ from suno_assistant.selectors import (
     TITLE_INPUT_SELECTORS,
     WEIRDNESS_SLIDER_SELECTORS,
 )
+from suno_assistant.song_downloads import SongDownloadResult
+from suno_assistant.song_links import GeneratedSongLink
 from suno_assistant.song_renames import SongRenameRequest
 from suno_assistant.steps import (
     CollectGeneratedSongLinks,
+    DownloadGeneratedSongs,
     FillSunoRequest,
     RenameGeneratedSongs,
     SelectAdvancedMode,
@@ -41,6 +44,7 @@ from suno_assistant.steps import (
     _first_locator,
     classify_generation_outcome,
     classify_song_collection_outcome,
+    classify_song_download_outcome,
     classify_song_rename_outcome,
 )
 
@@ -625,6 +629,109 @@ def test_collect_generated_song_links_blocks_unauthenticated_page(tmp_path: Path
     assert ctx.sink.events[0][0] == "song_links_failed"
     assert not output_path.exists()
     assert classify_song_collection_outcome([result]) == "blocked"
+
+
+def test_download_generated_songs_writes_results_file(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The download step should write a result file when all requested audio downloads succeed."""
+
+    output_dir = tmp_path / "audio"
+    output_path = tmp_path / "downloads.json"
+    ctx = make_ctx(FakePage(["library_with_songs.html"]))
+    songs = [GeneratedSongLink(title="Camden, 1892 -v1", url="https://suno.com/song/song_abc", song_id="song_abc")]
+
+    async def fake_resolve_song_download_targets(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return songs
+
+    async def fake_download_generated_song_audio(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [
+            SongDownloadResult(
+                url="https://suno.com/song/song_abc",
+                title="Camden, 1892 -v1",
+                song_id="song_abc",
+                download_format="mp3",
+                outcome="downloaded",
+                output_path=str(output_dir / "Camden, 1892 -v1.mp3"),
+                suggested_filename="Camden, 1892 -v1.mp3",
+            )
+        ]
+
+    monkeypatch.setattr("suno_assistant.steps._resolve_song_download_targets", fake_resolve_song_download_targets)
+    monkeypatch.setattr("suno_assistant.steps._download_generated_song_audio", fake_download_generated_song_audio)
+
+    result = asyncio.run(
+        DownloadGeneratedSongs(
+            source_url="https://suno.com/playlist/example",
+            output_dir=output_dir,
+            output_path=output_path,
+            download_formats=("mp3",),
+        ).execute(ctx)
+    )
+
+    assert result.outcome == "ok"
+    assert ctx.counters == {"suno.song_audio_downloaded": 1}
+    assert ctx.sink.events[0][0] == "song_downloads_completed"
+    assert output_path.exists()
+    assert classify_song_download_outcome([result]) == "completed"
+
+
+def test_download_generated_songs_reports_blocked_or_failed_assets(  # type: ignore[no-untyped-def]
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The download step should serialize partial success and blocked assets as a failed run."""
+
+    output_dir = tmp_path / "audio"
+    output_path = tmp_path / "downloads.json"
+    ctx = make_ctx(FakePage(["library_with_songs.html"]))
+    songs = [
+        GeneratedSongLink(
+            title="Camden, 1892 -v1",
+            url="https://suno.com/song/song_abc",
+            song_id="song_abc",
+        )
+    ]
+
+    async def fake_resolve_song_download_targets(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return songs
+
+    async def fake_download_generated_song_audio(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return [
+            SongDownloadResult(
+                url="https://suno.com/song/song_abc",
+                title="Camden, 1892 -v1",
+                song_id="song_abc",
+                download_format="mp3",
+                outcome="downloaded",
+                output_path=str(output_dir / "Camden, 1892 -v1.mp3"),
+                suggested_filename="Camden, 1892 -v1.mp3",
+            ),
+            SongDownloadResult(
+                url="https://suno.com/song/song_abc",
+                title="Camden, 1892 -v1",
+                song_id="song_abc",
+                download_format="wav",
+                outcome="blocked",
+                error="blocked:wav_requires_pro",
+            ),
+        ]
+
+    monkeypatch.setattr("suno_assistant.steps._resolve_song_download_targets", fake_resolve_song_download_targets)
+    monkeypatch.setattr("suno_assistant.steps._download_generated_song_audio", fake_download_generated_song_audio)
+
+    result = asyncio.run(
+        DownloadGeneratedSongs(
+            source_url="https://suno.com/playlist/example",
+            output_dir=output_dir,
+            output_path=output_path,
+            download_formats=("mp3", "wav"),
+        ).execute(ctx)
+    )
+
+    assert result.outcome == "fail"
+    assert result.error == "1 blocked song audio download(s)"
+    assert ctx.counters == {"suno.song_audio_downloaded": 1, "suno.song_audio_downloads_blocked": 1}
+    assert ctx.sink.events[0][0] == "song_downloads_failed"
+    assert output_path.exists()
+    assert classify_song_download_outcome([result]) == "blocked"
 
 
 def test_rename_generated_songs_updates_titles_and_writes_results(tmp_path: Path) -> None:
