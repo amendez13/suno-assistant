@@ -16,6 +16,7 @@ from typing import Any, Iterable, Literal, cast
 
 SongDownloadFormat = Literal["mp3", "wav"]
 SongDownloadOutcome = Literal["downloaded", "blocked", "failed"]
+_SONG_ID_PATTERN = re.compile(r"\bid=([0-9a-fA-F-]{36})\b")
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class SongDownloadResult:
     song_id: str | None = None
     output_path: str | None = None
     suggested_filename: str | None = None
+    verified_song_id: str | None = None
     error: str | None = None
 
 
@@ -179,6 +181,52 @@ def _sync_mp3_title_tag(path: Path, title: str) -> None:
     except (OSError, subprocess.SubprocessError):
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+def extract_downloaded_song_id(path: str | Path) -> str | None:
+    """Extract the embedded Suno song id from a downloaded audio file when available."""
+
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path is None:
+        return None
+
+    try:
+        probe = subprocess.run(
+            [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-show_entries",
+                "format_tags=comment",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(Path(path).expanduser()),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    match = _SONG_ID_PATTERN.search(probe.stdout)
+    if match is None:
+        return None
+    return match.group(1).lower()
+
+
+def validate_downloaded_song_file(path: str | Path, expected_song_id: str | None) -> tuple[bool, str | None, str | None]:
+    """Return whether a downloaded file embeds the expected Suno song id."""
+
+    if not expected_song_id:
+        return False, None, "Expected Suno song id missing for validation"
+
+    actual_song_id = extract_downloaded_song_id(path)
+    if actual_song_id is None:
+        return False, None, "Downloaded file is missing an embedded Suno song id"
+    if actual_song_id != expected_song_id.casefold():
+        return False, actual_song_id, f"Downloaded file song id mismatch: expected {expected_song_id}, got {actual_song_id}"
+    return True, actual_song_id, None
 
 
 def _export_payload(export: SongDownloadExport) -> dict[str, Any]:

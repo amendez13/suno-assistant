@@ -42,6 +42,8 @@ from suno_assistant.steps import (
     WaitForGenerationResult,
     _fill_first_available,
     _first_locator,
+    _looks_like_cover_reference_context,
+    _song_menu_candidate_sort_key,
     classify_generation_outcome,
     classify_song_collection_outcome,
     classify_song_download_outcome,
@@ -278,6 +280,33 @@ def test_select_advanced_mode_clicks_advanced_tab() -> None:
 
     assert result.outcome == "ok"
     assert ctx.page.clicks == [ADVANCED_TAB_SELECTORS.selectors[0]]
+
+
+def test_looks_like_cover_reference_context_matches_compact_reference_card_text() -> None:
+    """Compact relationship cards should be identifiable from their short labels."""
+
+    assert _looks_like_cover_reference_context("Cover of\nLimites")
+    assert _looks_like_cover_reference_context("Remaster of\nHengist Cyning 4")
+    assert _looks_like_cover_reference_context("Edit of\nSomething")
+    assert _looks_like_cover_reference_context("Remix of\nSomething")
+    assert not _looks_like_cover_reference_context("Alex M\nCover of\nLimites\n36")
+
+
+def test_song_menu_candidate_sort_key_prefers_main_song_controls_over_cover_reference_card() -> None:
+    """Main song action controls should outrank the compact cover-reference card menu."""
+
+    cover_card_key = _song_menu_candidate_sort_key(
+        box={"x": 612.0, "y": 259.5, "width": 28.0, "height": 28.0},
+        viewport_width=1365.0,
+        shallow_context_texts=["", "", "Cover of\nLimites"],
+    )
+    main_song_key = _song_menu_candidate_sort_key(
+        box={"x": 644.8, "y": 321.0, "width": 40.0, "height": 28.0},
+        viewport_width=1365.0,
+        shallow_context_texts=["", "36", "36"],
+    )
+
+    assert main_song_key < cover_card_key
 
 
 def test_select_advanced_mode_requires_tab_selector() -> None:

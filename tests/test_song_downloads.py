@@ -5,8 +5,10 @@ from pathlib import Path
 
 from suno_assistant.song_downloads import (
     SongDownloadResult,
+    extract_downloaded_song_id,
     normalize_downloaded_song_results,
     resolve_song_download_formats,
+    validate_downloaded_song_file,
     write_song_download_results_file,
 )
 
@@ -123,3 +125,49 @@ def test_normalize_downloaded_song_results_adds_song_id_suffix_on_title_collisio
     assert (tmp_path / "Shared Title [song_two].mp3").exists()
     assert results[0].output_path == str(tmp_path / "Shared Title.mp3")
     assert results[1].output_path == str(tmp_path / "Shared Title [song_two].mp3")
+
+
+def test_extract_downloaded_song_id_reads_embedded_comment(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    """Embedded Suno ids should be parsed from ffprobe comment metadata."""
+
+    class _Completed:
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    song_path = tmp_path / "song.mp3"
+    song_path.write_bytes(b"mp3")
+
+    monkeypatch.setattr("suno_assistant.song_downloads.shutil.which", lambda binary: f"/usr/bin/{binary}")
+    monkeypatch.setattr(
+        "suno_assistant.song_downloads.subprocess.run",
+        lambda *args, **kwargs: _Completed(
+            "made with suno; created=2025-10-08T16:20:02.314Z; id=116d34f4-b3d5-48b8-9334-011b1dd1df00\n"
+        ),
+    )
+
+    assert extract_downloaded_song_id(song_path) == "116d34f4-b3d5-48b8-9334-011b1dd1df00"
+
+
+def test_validate_downloaded_song_file_reports_id_mismatch(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    """Downloads should fail validation when the embedded id is not the requested song."""
+
+    song_path = tmp_path / "song.mp3"
+    song_path.write_bytes(b"mp3")
+
+    monkeypatch.setattr(
+        "suno_assistant.song_downloads.extract_downloaded_song_id",
+        lambda path: "3d6790d7-7248-4d7c-91a9-ae649cebcb57",
+    )
+
+    valid, actual_id, error = validate_downloaded_song_file(song_path, "116d34f4-b3d5-48b8-9334-011b1dd1df00")
+
+    assert not valid
+    assert actual_id == "3d6790d7-7248-4d7c-91a9-ae649cebcb57"
+    assert error == (
+        "Downloaded file song id mismatch: expected 116d34f4-b3d5-48b8-9334-011b1dd1df00, "
+        "got 3d6790d7-7248-4d7c-91a9-ae649cebcb57"
+    )

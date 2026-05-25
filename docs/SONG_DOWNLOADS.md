@@ -57,6 +57,9 @@ python -m suno_assistant.main \
 - Files are renamed into title-based filenames after download, using the
   visible Suno song title when available instead of trusting Suno's suggested
   browser filename.
+- After each file is saved, Suno Assistant verifies the downloaded file's
+  embedded Suno song id against the requested song before accepting it as a
+  valid download.
 - If two different songs resolve to the same title-based filename, Suno
   Assistant appends a short song-id suffix instead of overwriting silently.
 - MP3 downloads also get their embedded `title` tag rewritten to match the
@@ -83,6 +86,7 @@ Each result row records:
 - `outcome`: `downloaded`, `blocked`, or `failed`
 - `output_path` when a file was saved
 - `suggested_filename` when Suno started a browser download
+- `verified_song_id` when the downloaded file exposed an embedded Suno id
 - `error` when a requested format did not download
 
 ## Constraints

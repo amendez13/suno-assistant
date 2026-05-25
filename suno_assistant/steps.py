@@ -58,6 +58,7 @@ from .song_downloads import (
     SongDownloadFormat,
     SongDownloadResult,
     normalize_downloaded_song_results,
+    validate_downloaded_song_file,
     write_song_download_results_file,
 )
 from .song_links import GeneratedSongLink, SongLinkFormat, extract_song_links_page_state, write_song_links_file
@@ -345,6 +346,7 @@ class CollectGeneratedSongLinks:
                 )
                 return StepResult(name=self.name, outcome="fail", error=f"blocked:{state.blocked_reason}", extracted=state)
             if state.songs or time.monotonic() >= deadline:
+                state = await _collect_song_links_until_stable(ctx, base_url=self.source_url, initial_state=state)
                 export = write_song_links_file(
                     self.output_path,
                     state.songs,
@@ -595,7 +597,7 @@ async def _resolve_song_download_targets(ctx: VisitContext, source_url: str) -> 
     if direct_song is not None:
         return [direct_song]
 
-    state = await extract_song_links_page_state(ctx.page, base_url=source_url)
+    state = await _collect_song_links_until_stable(ctx, base_url=source_url)
     ctx.extracted["song_links_page_state"] = state
     if state.blocked_reason is not None:
         ctx.increment("suno.song_downloads_blocked")
@@ -613,6 +615,45 @@ async def _resolve_song_download_targets(ctx: VisitContext, source_url: str) -> 
         )
         return StepResult(name="resolve_song_download_targets", outcome="fail", error=f"blocked:{state.blocked_reason}")
     return state.songs
+
+
+async def _collect_song_links_until_stable(
+    ctx: VisitContext,
+    *,
+    base_url: str,
+    initial_state: Any | None = None,
+    max_scroll_rounds: int = 12,
+    stable_rounds: int = 3,
+) -> Any:
+    """Scroll song-list pages until the extracted song count stops increasing."""
+
+    state = initial_state or await extract_song_links_page_state(ctx.page, base_url=base_url)
+    if state.blocked_reason is not None or not state.songs:
+        return state
+
+    best_state = state
+    stagnant = 0
+    last_height = await _page_scroll_height(ctx.page)
+    for _ in range(max_scroll_rounds):
+        if not hasattr(ctx.page, "evaluate"):
+            break
+        await ctx.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await _gentle_action_pause(ctx, min_seconds=0.6, max_seconds=1.1)
+        state = await extract_song_links_page_state(ctx.page, base_url=base_url)
+        if state.blocked_reason is not None:
+            return state
+        current_height = await _page_scroll_height(ctx.page)
+        if len(state.songs) > len(best_state.songs):
+            best_state = state
+            stagnant = 0
+        elif current_height == last_height:
+            stagnant += 1
+        else:
+            stagnant = 0
+        last_height = current_height
+        if stagnant >= stable_rounds:
+            break
+    return best_state
 
 
 async def _download_generated_song_audio(
@@ -682,6 +723,19 @@ async def _download_generated_song_format(
                 song_id=song.song_id,
             )
             await download.save_as(str(output_path))
+            valid_download, verified_song_id, validation_error = validate_downloaded_song_file(output_path, song.song_id)
+            if not valid_download:
+                return SongDownloadResult(
+                    url=song.url,
+                    title=song.title or output_path.stem,
+                    song_id=song.song_id,
+                    download_format=download_format,
+                    outcome="failed",
+                    output_path=str(output_path),
+                    suggested_filename=download.suggested_filename,
+                    verified_song_id=verified_song_id,
+                    error=validation_error,
+                )
             return SongDownloadResult(
                 url=song.url,
                 title=song.title or output_path.stem,
@@ -690,6 +744,7 @@ async def _download_generated_song_format(
                 outcome="downloaded",
                 output_path=str(output_path),
                 suggested_filename=download.suggested_filename,
+                verified_song_id=verified_song_id,
             )
         except PlaywrightTimeoutError:
             error = _download_timeout_reason(download_format=download_format, button_text=label_text)
@@ -713,21 +768,16 @@ async def _download_generated_song_format(
 
 
 async def _open_song_download_menu(ctx: VisitContext) -> bool:
-    for selector in SONG_MORE_MENU_SELECTORS.selectors:
-        locator = ctx.page.locator(selector)
-        count = int(await locator.count())
-        for index in range(count):
-            target = _locator_at(locator, index)
-            if not await target.is_visible():
-                continue
-            await target.click()
-            await _gentle_action_pause(ctx)
-            if await _selector_group_visible(ctx.page, SONG_DOWNLOAD_ACTION_SELECTORS.selectors):
-                clicked = await _click_first_available(ctx.page, SONG_DOWNLOAD_ACTION_SELECTORS.selectors)
-                if clicked:
-                    await _gentle_action_pause(ctx)
-                    return True
-            await _dismiss_song_overlay(ctx)
+    candidates = await _ranked_song_menu_candidates(ctx.page)
+    for target in candidates:
+        await target.click()
+        await _gentle_action_pause(ctx)
+        if await _selector_group_visible(ctx.page, SONG_DOWNLOAD_ACTION_SELECTORS.selectors):
+            clicked = await _click_first_available(ctx.page, SONG_DOWNLOAD_ACTION_SELECTORS.selectors)
+            if clicked:
+                await _gentle_action_pause(ctx)
+                return True
+        await _dismiss_song_overlay(ctx)
     return False
 
 
@@ -741,6 +791,48 @@ async def _dismiss_song_overlay(ctx: VisitContext) -> None:
     except Exception:
         pass
     await _gentle_action_pause(ctx)
+
+
+async def _ranked_song_menu_candidates(page: Any) -> list[Any]:
+    viewport_width = await _page_viewport_width(page)
+    scored_candidates: list[tuple[tuple[int, int, float, float], Any]] = []
+    fallback_candidates: list[Any] = []
+    seen_boxes: set[tuple[float, float, float, float]] = set()
+    for selector in SONG_MORE_MENU_SELECTORS.selectors:
+        locator = page.locator(selector)
+        count = int(await locator.count())
+        for index in range(count):
+            target = _locator_at(locator, index)
+            if not await target.is_visible():
+                continue
+            fallback_candidates.append(target)
+            box = await target.bounding_box()
+            if box is None:
+                continue
+            box_key = (
+                round(float(box.get("x", 0.0)), 1),
+                round(float(box.get("y", 0.0)), 1),
+                round(float(box.get("width", 0.0)), 1),
+                round(float(box.get("height", 0.0)), 1),
+            )
+            if box_key in seen_boxes:
+                continue
+            seen_boxes.add(box_key)
+            shallow_context_texts = await _song_menu_candidate_context_texts(target)
+            scored_candidates.append(
+                (
+                    _song_menu_candidate_sort_key(
+                        box=box,
+                        viewport_width=viewport_width,
+                        shallow_context_texts=shallow_context_texts,
+                    ),
+                    target,
+                )
+            )
+    if not scored_candidates:
+        return fallback_candidates
+    scored_candidates.sort(key=lambda item: item[0])
+    return [target for _, target in scored_candidates]
 
 
 async def _rename_generated_song(ctx: VisitContext, rename: SongRenameRequest) -> SongRenameResult:
@@ -1047,6 +1139,16 @@ async def _gentle_action_pause(ctx: VisitContext, *, min_seconds: float = 0.35, 
     await asyncio.sleep(rng.uniform(min_seconds, max_seconds))
 
 
+async def _page_scroll_height(page: Any) -> int:
+    try:
+        height = await page.evaluate("() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)")
+    except Exception:
+        return 0
+    if isinstance(height, (int, float)):
+        return int(height)
+    return 0
+
+
 async def _failed_fill(ctx: VisitContext, request: SongRequest, phase: str, error: str) -> StepResult:
     await ctx.sink.write(
         "generation_failed",
@@ -1071,6 +1173,50 @@ async def _first_visible_locator(locator: Any) -> Any | None:
     return None
 
 
+async def _song_menu_candidate_context_texts(target: Any, *, max_depth: int = 4) -> list[str]:
+    evaluate = getattr(target, "evaluate", None)
+    if not callable(evaluate):
+        return []
+    try:
+        return list(
+            await target.evaluate(
+                """(node, depth) => {
+                    const texts = [];
+                    let current = node.parentElement;
+                    for (let level = 0; level < depth && current; level += 1, current = current.parentElement) {
+                        const text = (current.innerText || current.textContent || "").trim().slice(0, 160);
+                        texts.push(text);
+                    }
+                    return texts;
+                }""",
+                max_depth,
+            )
+        )
+    except Exception:
+        return []
+
+
+def _song_menu_candidate_sort_key(
+    *,
+    box: dict[str, float],
+    viewport_width: float | None,
+    shallow_context_texts: list[str],
+) -> tuple[int, int, float, float]:
+    x = float(box.get("x", 0.0))
+    y = float(box.get("y", 0.0))
+    is_cover_reference = any(_looks_like_cover_reference_context(text) for text in shallow_context_texts)
+    is_far_right = viewport_width is not None and x > viewport_width * 0.72
+    return (1 if is_cover_reference else 0, 1 if is_far_right else 0, y, x)
+
+
+def _looks_like_cover_reference_context(text: str) -> bool:
+    normalized = " ".join(text.split()).strip().lower()
+    for prefix in ("cover", "remaster", "edit", "remix"):
+        if normalized.startswith(f"{prefix} of "):
+            return True
+    return False
+
+
 def _locator_at(locator: Any, index: int) -> Any:
     nth = getattr(locator, "nth", None)
     if callable(nth):
@@ -1088,3 +1234,18 @@ def _increment_blocked_counters(ctx: VisitContext, state: CreatePageState) -> No
     ctx.increment("suno.blocked_states_detected")
     if state.blocked_reason == "policy_rejected":
         ctx.increment("suno.policy_blocks_detected")
+
+
+async def _page_viewport_width(page: Any) -> float | None:
+    viewport_size = getattr(page, "viewport_size", None)
+    if isinstance(viewport_size, dict) and viewport_size.get("width"):
+        return float(viewport_size["width"])
+    if not hasattr(page, "evaluate"):
+        return None
+    try:
+        width = await page.evaluate("window.innerWidth")
+    except Exception:
+        return None
+    if width is None:
+        return None
+    return float(width)
