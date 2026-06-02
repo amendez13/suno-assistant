@@ -15,10 +15,11 @@ bounded browser execution, pacing, persisted session state, and run artifacts.
 
 - Site-specific Suno visit plans kept outside the reusable framework.
 - A bounded create-page smoke run that exercises the Suno-specific app through `gsv`.
-- A future prompt-to-song workflow for original song instructions, generation requests, and evidence capture.
+- A bounded prompt-to-song workflow for original song instructions, generation requests, and evidence capture.
+- Generated-song link export to JSON, JSONL, or Markdown for downstream project tracking.
 - Gentle human-cadence browsing through `gentle-site-visitor` primitives.
 - Per-run observability through manifests, evidence JSONL, HAR, trace, and logs.
-- Private-repository workflow with CI, pre-commit, branch protection docs, and session notes.
+- Repository workflow with CI, pre-commit, branch protection docs, and session notes.
 
 ## Quick Start
 
@@ -66,19 +67,128 @@ cp config/config.example.yaml config/config.yaml
 python -m suno_assistant.main
 ```
 
+Run the create-page smoke path with a quick, validated song request:
+
+```bash
+python -m suno_assistant.main --prompt "A bright original indie pop song about finishing a hard project."
+```
+
+Or use a structured YAML request:
+
+```bash
+python -m suno_assistant.main --request examples/song-request.yaml
+```
+
+Fill the create box without submitting a generation:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --fill-only \
+  --prompt "A warm original acoustic pop song about writing a careful checklist before launch."
+```
+
+Fill Suno Advanced mode controls without submitting:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --fill-only \
+  --request examples/advanced-song-request.yaml
+```
+
+The current request-aware path validates the song request before browser startup
+and runs the bounded generation plan after the saved Suno session is verified.
+The MVP generation path fills supported fields, submits once, waits within a
+bounded timeout for visible results or known blocked states, and records a
+Suno-specific evidence events in the active GSV evidence sink. `--fill-only`
+stops after populating supported fields and never clicks create/generate. The
+create workflow itself does not download audio files or bypass Suno quotas,
+moderation, CAPTCHA, MFA, or other platform controls.
+
+Collect visible generated-song titles and links from the authenticated Suno
+library without downloading audio:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --collect-songs data/song-links/latest.json
+```
+
+The collector writes JSON by default, JSONL for `.jsonl`, and Markdown for
+`.md` or `.markdown`. Use `--songs-url` to inspect another Suno page with
+visible song cards, such as `https://suno.com/create`, and `--songs-format` to
+set the format explicitly. See [docs/SONG_LINKS.md](docs/SONG_LINKS.md).
+
+Download MP3 and/or WAV audio from a Suno playlist page or a single song page:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --download-songs data/song-downloads \
+  --songs-url https://suno.com/playlist/<playlist-id> \
+  --download-formats both
+```
+
+The download workflow reuses the saved authenticated session, resolves song
+URLs from the playlist or single-song source, then visits each song page and
+uses Suno's visible `More -> Download` controls. It records a JSON result file
+beside the downloads and reports blocked formats, such as WAV on an ineligible
+plan, instead of retrying around account gating. See
+[docs/SONG_DOWNLOADS.md](docs/SONG_DOWNLOADS.md).
+
 To inspect the page manually in a visible browser and keep it open after the first navigation:
 
 ```bash
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 ```
 
-Browser storage state is persisted locally between launches under `data/browser/suno/state.json`, so cookie consent and other anonymous session state can carry across runs.
+Bootstrap your own Suno account session in a headed browser before running
+headless smoke or request-aware flows:
+
+```bash
+python -m suno_assistant.main --config config/config.yaml --headed --login
+```
+
+Complete Suno login, MFA, CAPTCHA, or other manual verification yourself in the
+browser. Suno Assistant does not automate credentials or bypass platform
+controls. Browser storage state is persisted locally between launches under
+`data/browser/suno/state.json`, so authenticated state, cookie consent, and
+other session state can carry across runs. If a later run cannot reach
+`https://suno.com/create` as an authenticated page, it exits with a blocked auth
+result before running any generation plan.
 
 The sample config also supports the framework CLI directly:
 
 ```bash
 gsv --config config/config.yaml run suno --once
 ```
+
+When observability is enabled, request-aware runs write reviewable evidence to
+the active session bundle:
+
+```text
+data/sessions/suno/<session-id>/evidence.jsonl
+```
+
+Events include `request_loaded`, `generation_submitted`,
+`generation_completed`, `generation_blocked`, `generation_failed`,
+`song_links_collected`, `song_downloads_completed`, and
+`song_downloads_failed`. Evidence contains the explicit prompt, visible result
+metadata, and local download result paths, so treat session artifacts as
+sensitive local files.
+
+For the full operator checklist, including headed login bootstrap, bounded live
+smoke runs, evidence review, and artifact cleanup, see
+[docs/MANUAL_SMOKE.md](docs/MANUAL_SMOKE.md). For the detailed create-page UI
+contract, including Advanced mode, More Options, title filling, and slider
+behavior, see [docs/CREATE_BOX.md](docs/CREATE_BOX.md).
 
 ## Configuration
 
@@ -96,6 +206,54 @@ sites:
     auth:
       auth_marker_url: "https://suno.com/create"
 ```
+
+`auth_marker_url` is the authenticated create-page marker used by the GSV
+session layer. If Suno redirects that URL to a sign-in or verification page, run
+the headed login bootstrap again.
+
+## Song Request Files
+
+Suno Assistant accepts YAML request files with the following fields:
+
+```yaml
+prompt: "A required original-song creative brief."
+title: "Optional local title"
+style: "Optional genre, mood, instrumentation, or arrangement guidance"
+lyrics: "Optional user-provided lyrics"
+instrumental: false
+custom_mode: false
+count: 1
+tags:
+  - demo
+notes: "Optional local-only notes"
+```
+
+Validation rejects empty prompts, unknown fields, non-positive or overly broad
+counts, lyrics on instrumental requests, and explicit requests to imitate a
+specific artist or voice. The initial hard cap is `4` generations per request.
+Validation happens before browser startup for `--prompt` and `--request`; the
+MVP CLI does not include a separate dry-run flag.
+
+Advanced-mode request files can add deterministic Suno Advanced controls:
+
+```yaml
+advanced_mode: true
+exclude_styles: "metal, harsh noise"
+vocal_gender: female
+style_mode: manual
+weirdness: 62
+style_influence: 78
+```
+
+The app fills text fields, two-choice buttons, and sliders. It does not operate
+asset pickers such as Audio, Voice, Inspo, workspace selection, saved styles, or
+random/generative helper buttons.
+
+Advanced mode handles Suno's current create UI by filling the first visible
+matching field, using the More Options `aria-expanded` state to avoid collapsing
+the panel, and setting sliders from their current `aria-valuenow` value with
+keyboard nudges. This keeps the behavior visible, bounded, and inspectable in
+headed fill-only runs.
 
 ## Project Structure
 
@@ -126,7 +284,7 @@ repository owns browser/session/pacing/observability/run mechanics.
 The framework dependency is a Git URL pinned to a release tag for repeatable installs:
 
 ```text
-gentle-site-visitor @ git+ssh://git@github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1
+gentle-site-visitor @ git+https://github.com/amendez13/gentle-site-visitor.git@v2026.05.07.1
 ```
 
 Use an adjacent editable checkout when developing framework and app changes together.
