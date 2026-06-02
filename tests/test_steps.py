@@ -5,9 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import suno_assistant.steps as steps_module
 from suno_assistant.requests import SongRequest
 from suno_assistant.selectors import (
     ADVANCED_TAB_SELECTORS,
+    AUTH_REQUIRED_SELECTORS,
     AUTO_STYLE_MODE_SELECTORS,
     CREATE_BUTTON_SELECTORS,
     EXCLUDE_STYLES_INPUT_SELECTORS,
@@ -18,6 +20,8 @@ from suno_assistant.selectors import (
     MANUAL_STYLE_MODE_SELECTORS,
     MORE_OPTIONS_SELECTORS,
     PROMPT_INPUT_SELECTORS,
+    SONG_DOWNLOAD_ACTION_SELECTORS,
+    SONG_DOWNLOAD_MP3_SELECTORS,
     SONG_MORE_MENU_SELECTORS,
     SONG_TITLE_EDIT_SELECTORS,
     SONG_TITLE_INPUT_SELECTORS,
@@ -28,7 +32,7 @@ from suno_assistant.selectors import (
     WEIRDNESS_SLIDER_SELECTORS,
 )
 from suno_assistant.song_downloads import SongDownloadResult
-from suno_assistant.song_links import GeneratedSongLink
+from suno_assistant.song_links import GeneratedSongLink, SongLinksPageState
 from suno_assistant.song_renames import SongRenameRequest
 from suno_assistant.steps import (
     CollectGeneratedSongLinks,
@@ -40,10 +44,26 @@ from suno_assistant.steps import (
     VerifyCreatePageFillable,
     VerifyCreatePageReady,
     WaitForGenerationResult,
+    _click_first_available,
+    _collect_song_links_until_stable,
+    _dismiss_song_overlay,
+    _download_generated_song_audio,
+    _download_generated_song_format,
+    _download_timeout_reason,
     _fill_first_available,
     _first_locator,
+    _generated_song_link_from_url,
+    _locator_text,
     _looks_like_cover_reference_context,
+    _open_song_download_menu,
+    _open_song_title_editor,
+    _page_scroll_height,
+    _page_viewport_width,
+    _ranked_song_menu_candidates,
+    _resolve_song_download_targets,
     _song_menu_candidate_sort_key,
+    _unique_download_output_path,
+    _wait_for_song_page_interactive,
     classify_generation_outcome,
     classify_song_collection_outcome,
     classify_song_download_outcome,
@@ -99,6 +119,9 @@ class FakeLocator:
         self.page.focuses.append(self.selector)
 
     async def get_attribute(self, name: str) -> str | None:
+        value = self.page.attribute_values.get((self.selector, name))
+        if value is not None:
+            return value
         if name != "aria-valuenow" or self.selector in self.page.no_value_selectors:
             return None
         return "50"
@@ -108,7 +131,56 @@ class FakeLocator:
             return None
         if self.selector in self.page.no_box_selectors:
             return None
-        return {"x": 10.0, "y": 20.0, "width": 100.0, "height": 10.0}
+        return self.page.bounding_boxes.get(
+            (self.selector, self.index),
+            {"x": 10.0, "y": 20.0, "width": 100.0, "height": 10.0},
+        )
+
+    async def inner_text(self) -> str:
+        return self.page.locator_texts.get((self.selector, self.index), "")
+
+    async def text_content(self) -> str:
+        return self.page.locator_texts.get((self.selector, self.index), "")
+
+    async def evaluate(self, script: str, *args: Any) -> Any:
+        del script, args
+        if (self.selector, self.index) in self.page.locator_evaluate_errors:
+            raise RuntimeError("locator evaluate failed")
+        return self.page.locator_evaluate_values.get((self.selector, self.index), [])
+
+
+class FakeDownload:
+    """Minimal Playwright download fake."""
+
+    def __init__(self, suggested_filename: str = "song.mp3") -> None:
+        self.suggested_filename = suggested_filename
+        self.saved_paths: list[str] = []
+
+    async def save_as(self, path: str) -> None:
+        self.saved_paths.append(path)
+        Path(path).write_bytes(b"audio")
+
+
+class FakeDownloadInfo:
+    """Async context manager returned by expect_download."""
+
+    def __init__(self, page: "FakePage") -> None:
+        self.page = page
+
+    async def _download_value(self) -> FakeDownload:
+        return self.page.next_download
+
+    @property
+    def value(self):  # type: ignore[no-untyped-def]
+        return self._download_value()
+
+    async def __aenter__(self) -> "FakeDownloadInfo":
+        if self.page.expect_download_raises is not None:
+            raise self.page.expect_download_raises
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        return None
 
 
 class FakeLocatorWithoutFirst:
@@ -130,6 +202,9 @@ class FakePage:
         hidden_selectors: set[str] | None = None,
         selector_counts: dict[str, int] | None = None,
         hidden_selector_indexes: set[tuple[str, int]] | None = None,
+        viewport_size: dict[str, int] | None = None,
+        evaluate_values: list[Any] | None = None,
+        evaluate_error: bool = False,
     ) -> None:
         self.fixture_names = fixture_names
         self.available_selectors = selectors or set()
@@ -138,7 +213,17 @@ class FakePage:
         self.no_value_selectors = no_value_selectors or set()
         self.hidden_selectors = hidden_selectors or set()
         self.hidden_selector_indexes = hidden_selector_indexes or set()
+        self.attribute_values: dict[tuple[str, str], str] = {}
+        self.bounding_boxes: dict[tuple[str, int], dict[str, float]] = {}
+        self.locator_texts: dict[tuple[str, int], str] = {}
+        self.locator_evaluate_values: dict[tuple[str, int], Any] = {}
+        self.locator_evaluate_errors: set[tuple[str, int]] = set()
+        self.viewport_size = viewport_size
+        self.evaluate_values = evaluate_values or []
+        self.evaluate_error = evaluate_error
         self.content_calls = 0
+        self.load_state_calls: list[tuple[str, int]] = []
+        self.evaluate_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.fills: list[tuple[str, str]] = []
         self.fill_indexes: list[tuple[str, int]] = []
         self.clicks: list[str] = []
@@ -148,6 +233,8 @@ class FakePage:
         self.mouse = SimpleNamespace(click=self._mouse_click)
         self.keyboard_presses: list[str] = []
         self.keyboard = SimpleNamespace(press=self._keyboard_press)
+        self.next_download = FakeDownload()
+        self.expect_download_raises: Exception | None = None
 
     async def content(self) -> str:
         index = min(self.content_calls, len(self.fixture_names) - 1)
@@ -160,6 +247,21 @@ class FakePage:
     async def goto(self, url: str, wait_until: str = "load") -> None:
         del wait_until
         self.gotos.append(url)
+
+    async def wait_for_load_state(self, state: str, timeout: int = 0) -> None:
+        self.load_state_calls.append((state, timeout))
+
+    async def evaluate(self, script: str, *args: Any) -> Any:
+        self.evaluate_calls.append((script, args))
+        if self.evaluate_error:
+            raise RuntimeError("evaluate failed")
+        if self.evaluate_values:
+            return self.evaluate_values.pop(0)
+        return 0
+
+    def expect_download(self, timeout: int = 0) -> FakeDownloadInfo:
+        del timeout
+        return FakeDownloadInfo(self)
 
     async def _mouse_click(self, x: float, y: float) -> None:
         self.mouse_clicks.append((x, y))
@@ -803,3 +905,321 @@ def test_rename_generated_songs_reports_missing_edit_control(tmp_path: Path) -> 
     assert ctx.sink.events[0][0] == "song_renames_failed"
     assert output_path.exists()
     assert classify_song_rename_outcome([result]) == "failed"
+
+
+def test_resolve_song_download_targets_accepts_direct_song_url() -> None:
+    """Single-song URLs should bypass library-page scraping."""
+
+    ctx = make_ctx(FakePage(["library_with_songs.html"]))
+
+    targets = asyncio.run(_resolve_song_download_targets(ctx, "https://suno.com/song/song_abc"))
+
+    assert isinstance(targets, list)
+    assert targets == [GeneratedSongLink(title=None, url="https://suno.com/song/song_abc", song_id="song_abc")]
+    assert _generated_song_link_from_url("https://suno.com/library") is None
+
+
+def test_resolve_song_download_targets_reports_blocked_library(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Blocked library pages should write a failure event before download attempts."""
+
+    ctx = make_ctx(FakePage(["library_unauthenticated.html"]))
+
+    async def fake_collect(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return SongLinksPageState(authenticated=False, blocked_reason="auth_required")
+
+    monkeypatch.setattr(steps_module, "_collect_song_links_until_stable", fake_collect)
+
+    result = asyncio.run(_resolve_song_download_targets(ctx, "https://suno.com/library"))
+
+    assert result.name == "resolve_song_download_targets"
+    assert result.outcome == "fail"
+    assert result.error == "blocked:auth_required"
+    assert ctx.counters == {"suno.song_downloads_blocked": 1}
+    assert ctx.sink.events[0][0] == "song_downloads_failed"
+
+
+def test_collect_song_links_until_stable_scrolls_until_count_stops(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Collection should keep the largest seen song list while scrolling."""
+
+    states = [
+        SongLinksPageState(authenticated=True, songs=[GeneratedSongLink(title="A", url="https://suno.com/song/a")]),
+        SongLinksPageState(
+            authenticated=True,
+            songs=[
+                GeneratedSongLink(title="A", url="https://suno.com/song/a"),
+                GeneratedSongLink(title="B", url="https://suno.com/song/b"),
+            ],
+        ),
+        SongLinksPageState(
+            authenticated=True,
+            songs=[
+                GeneratedSongLink(title="A", url="https://suno.com/song/a"),
+                GeneratedSongLink(title="B", url="https://suno.com/song/b"),
+            ],
+        ),
+    ]
+
+    async def fake_extract(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return states.pop(0)
+
+    monkeypatch.setattr(steps_module, "extract_song_links_page_state", fake_extract)
+    page = FakePage(["library_with_songs.html"], evaluate_values=[100, 100, 100])
+    ctx = make_ctx(page)
+
+    state = asyncio.run(
+        _collect_song_links_until_stable(ctx, base_url="https://suno.com/library", max_scroll_rounds=2, stable_rounds=1)
+    )
+
+    assert len(state.songs) == 2
+    assert page.evaluate_calls[0][0].startswith("() => Math.max")
+    assert page.evaluate_calls[1][0] == "window.scrollTo(0, document.body.scrollHeight)"
+
+
+def test_download_generated_song_audio_runs_requested_formats(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    """The audio helper should collect one result for each requested format."""
+
+    async def fake_download_format(ctx, *, song, output_dir, download_format):  # type: ignore[no-untyped-def]
+        del ctx, output_dir
+        return SongDownloadResult(
+            url=song.url,
+            title=song.title,
+            song_id=song.song_id,
+            download_format=download_format,
+            outcome="downloaded",
+        )
+
+    monkeypatch.setattr(steps_module, "_download_generated_song_format", fake_download_format)
+    ctx = make_ctx(FakePage(["library_with_songs.html"]))
+    song = GeneratedSongLink(title="Song", url="https://suno.com/song/song_abc", song_id="song_abc")
+
+    results = asyncio.run(_download_generated_song_audio(ctx, song=song, output_dir=tmp_path, formats=("mp3", "wav")))
+
+    assert [result.download_format for result in results] == ["mp3", "wav"]
+
+
+def test_download_generated_song_format_saves_valid_download(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
+    """A visible menu and valid downloaded file should produce a downloaded result."""
+
+    selectors = {
+        SONG_MORE_MENU_SELECTORS.selectors[0],
+        SONG_DOWNLOAD_ACTION_SELECTORS.selectors[0],
+        SONG_DOWNLOAD_MP3_SELECTORS.selectors[0],
+    }
+    page = FakePage(["library_with_songs.html"], selectors=selectors)
+    page.next_download = FakeDownload("Suno Song.mp3")
+    ctx = make_ctx(page)
+    song = GeneratedSongLink(title="Suno Song", url="https://suno.com/song/song_abc", song_id="song_abc")
+    monkeypatch.setattr(steps_module, "_open_song_download_menu", lambda ctx: asyncio.sleep(0, result=True))
+    monkeypatch.setattr(steps_module, "validate_downloaded_song_file", lambda path, song_id: (True, song_id, None))
+
+    result = asyncio.run(_download_generated_song_format(ctx, song=song, output_dir=tmp_path, download_format="mp3"))
+
+    assert result.outcome == "downloaded"
+    assert result.output_path == str(tmp_path / "Suno Song.mp3")
+    assert result.verified_song_id == "song_abc"
+    assert page.gotos == ["https://suno.com/song/song_abc"]
+
+
+def test_download_generated_song_format_reports_auth_required() -> None:
+    """Authenticated-only song pages should block downloads explicitly."""
+
+    page = FakePage(["library_unauthenticated.html"], selectors={AUTH_REQUIRED_SELECTORS.selectors[0]})
+    ctx = make_ctx(page)
+    song = GeneratedSongLink(title="Locked", url="https://suno.com/song/song_abc", song_id="song_abc")
+
+    result = asyncio.run(_download_generated_song_format(ctx, song=song, output_dir=Path("."), download_format="mp3"))
+
+    assert result.outcome == "blocked"
+    assert result.error == "blocked:auth_required"
+
+
+def test_download_generated_song_format_reports_missing_menu_and_action(tmp_path: Path) -> None:
+    """Missing menu/action controls should be reported as serialized failures."""
+
+    song = GeneratedSongLink(title="Song", url="https://suno.com/song/song_abc", song_id="song_abc")
+    no_menu_result = asyncio.run(
+        _download_generated_song_format(
+            make_ctx(FakePage(["library_with_songs.html"])), song=song, output_dir=tmp_path, download_format="mp3"
+        )
+    )
+
+    action_only = FakePage(
+        ["library_with_songs.html"],
+        selectors={SONG_MORE_MENU_SELECTORS.selectors[0], SONG_DOWNLOAD_ACTION_SELECTORS.selectors[0]},
+    )
+    no_mp3_result = asyncio.run(
+        _download_generated_song_format(make_ctx(action_only), song=song, output_dir=tmp_path, download_format="mp3")
+    )
+
+    assert no_menu_result.outcome == "failed"
+    assert no_menu_result.error == "Song download menu not found"
+    assert no_mp3_result.outcome == "failed"
+    assert no_mp3_result.error == "MP3 download action not found"
+
+
+def test_download_generated_song_format_classifies_pro_timeout(tmp_path: Path) -> None:
+    """A timeout on a Pro-labeled action should become a blocked result."""
+
+    selectors = {
+        SONG_MORE_MENU_SELECTORS.selectors[0],
+        SONG_DOWNLOAD_ACTION_SELECTORS.selectors[0],
+        SONG_DOWNLOAD_MP3_SELECTORS.selectors[0],
+    }
+    page = FakePage(["library_with_songs.html"], selectors=selectors)
+    page.locator_texts[(SONG_DOWNLOAD_MP3_SELECTORS.selectors[0], 0)] = "Download MP3 Pro"
+    page.expect_download_raises = steps_module.PlaywrightTimeoutError("timeout")
+    ctx = make_ctx(page)
+    song = GeneratedSongLink(title="Song", url="https://suno.com/song/song_abc", song_id="song_abc")
+
+    result = asyncio.run(_download_generated_song_format(ctx, song=song, output_dir=tmp_path, download_format="mp3"))
+
+    assert result.outcome == "blocked"
+    assert result.error == "blocked:mp3_requires_pro"
+    assert _download_timeout_reason(download_format="wav", button_text=None) == "WAV download did not start"
+
+
+def test_open_song_download_menu_dismisses_failed_candidates() -> None:
+    """Menu probing should dismiss overlays when no download submenu appears."""
+
+    page = FakePage(["library_with_songs.html"], selectors={SONG_MORE_MENU_SELECTORS.selectors[0]})
+    ctx = make_ctx(page)
+
+    opened = asyncio.run(_open_song_download_menu(ctx))
+
+    assert opened is False
+    assert page.keyboard_presses == ["Escape"]
+    assert page.mouse_clicks == [(10, 10)]
+
+
+def test_open_song_download_menu_clicks_download_action() -> None:
+    """Menu probing should click the nested download action when it appears."""
+
+    page = FakePage(
+        ["library_with_songs.html"],
+        selectors={SONG_MORE_MENU_SELECTORS.selectors[0], SONG_DOWNLOAD_ACTION_SELECTORS.selectors[0]},
+    )
+    ctx = make_ctx(page)
+
+    opened = asyncio.run(_open_song_download_menu(ctx))
+
+    assert opened is True
+    assert page.clicks == [SONG_MORE_MENU_SELECTORS.selectors[0], SONG_DOWNLOAD_ACTION_SELECTORS.selectors[0]]
+
+
+def test_ranked_song_menu_candidates_scores_visible_boxes() -> None:
+    """Candidate ranking should deduplicate by box and prefer main-song controls."""
+
+    selector = SONG_MORE_MENU_SELECTORS.selectors[0]
+    page = FakePage(
+        ["library_with_songs.html"], selectors={selector}, selector_counts={selector: 3}, viewport_size={"width": 1000}
+    )
+    page.bounding_boxes[(selector, 0)] = {"x": 820, "y": 50, "width": 10, "height": 10}
+    page.bounding_boxes[(selector, 1)] = {"x": 50, "y": 70, "width": 10, "height": 10}
+    page.bounding_boxes[(selector, 2)] = {"x": 50, "y": 70, "width": 10, "height": 10}
+    page.locator_evaluate_values[(selector, 0)] = ["Cover of Example"]
+    page.locator_evaluate_values[(selector, 1)] = ["Main song"]
+
+    candidates = asyncio.run(_ranked_song_menu_candidates(page))
+
+    assert [(candidate.selector, candidate.index) for candidate in candidates] == [(selector, 1), (selector, 0)]
+
+
+def test_rename_generated_song_handles_auth_input_and_enter_paths() -> None:
+    """Direct rename helper should cover blocked, missing-input, and Enter-save branches."""
+
+    rename = SongRenameRequest(url="https://suno.com/song/song_abc", title="New Title")
+
+    blocked = asyncio.run(
+        steps_module._rename_generated_song(
+            make_ctx(FakePage(["library_unauthenticated.html"], selectors={AUTH_REQUIRED_SELECTORS.selectors[0]})),
+            rename,
+        )
+    )
+    missing_input = asyncio.run(
+        steps_module._rename_generated_song(
+            make_ctx(FakePage(["library_with_songs.html"], selectors={SONG_TITLE_EDIT_SELECTORS.selectors[0]})),
+            rename,
+        )
+    )
+    page = FakePage(["library_with_songs.html"], selectors={SONG_TITLE_INPUT_SELECTORS.selectors[0]})
+    renamed = asyncio.run(steps_module._rename_generated_song(make_ctx(page), rename))
+
+    assert blocked.outcome == "failed"
+    assert blocked.error == "blocked:auth_required"
+    assert missing_input.error == "Song title edit control not found"
+    assert renamed.outcome == "renamed"
+    assert page.keyboard_presses == ["Enter"]
+
+
+def test_open_song_title_editor_supports_more_menu_path() -> None:
+    """The title editor can be opened through the song menu fallback."""
+
+    page = FakePage(
+        ["library_with_songs.html"],
+        selectors={
+            SONG_MORE_MENU_SELECTORS.selectors[0],
+            SONG_TITLE_EDIT_SELECTORS.selectors[0],
+            SONG_TITLE_INPUT_SELECTORS.selectors[0],
+        },
+    )
+
+    assert asyncio.run(_open_song_title_editor(make_ctx(page))) is True
+
+
+def test_small_page_and_locator_helpers() -> None:
+    """Small defensive helpers should handle absent APIs and conversion failures."""
+
+    page = FakePage(["library_with_songs.html"], evaluate_values=[720, "bad"], evaluate_error=False)
+    assert asyncio.run(_page_viewport_width(page)) == 720.0
+    assert asyncio.run(_page_scroll_height(page)) == 0
+    assert asyncio.run(_page_viewport_width(FakePage(["library_with_songs.html"], evaluate_error=True))) is None
+    assert asyncio.run(_page_scroll_height(FakePage(["library_with_songs.html"], evaluate_error=True))) == 0
+    assert asyncio.run(_locator_text(FakeLocator(FakePage(["library_with_songs.html"]), "missing"))) is None
+
+
+def test_unique_download_output_path_adds_suffixes(tmp_path: Path) -> None:
+    """Duplicate suggested filenames should get song-id and attempt suffixes."""
+
+    (tmp_path / "song.mp3").write_bytes(b"one")
+    (tmp_path / "song [abcdef12].mp3").write_bytes(b"two")
+
+    path = _unique_download_output_path(
+        output_dir=tmp_path,
+        suggested_filename="song.mp3",
+        song_id="abcdef12-0000-0000-0000-000000000000",
+    )
+
+    assert path == tmp_path / "song [abcdef12-2].mp3"
+
+
+def test_click_and_dismiss_helpers_tolerate_missing_controls() -> None:
+    """Optional low-level UI helpers should return false or swallow UI cleanup errors."""
+
+    page = FakePage(["library_with_songs.html"])
+
+    async def raise_press(_key: str) -> None:
+        raise RuntimeError("keyboard unavailable")
+
+    async def raise_click(_x: float, _y: float) -> None:
+        raise RuntimeError("mouse unavailable")
+
+    page.keyboard = SimpleNamespace(press=raise_press)
+    page.mouse = SimpleNamespace(click=raise_click)
+
+    assert asyncio.run(_click_first_available(page, ("missing",))) is False
+    asyncio.run(_dismiss_song_overlay(make_ctx(page)))
+
+
+def test_wait_for_song_page_interactive_observes_visible_control() -> None:
+    """The interactive wait should stop once a song control appears."""
+
+    ctx = make_ctx(FakePage(["library_with_songs.html"], selectors={SONG_MORE_MENU_SELECTORS.selectors[0]}))
+    delattr(ctx, "_skip_gentle_pause")
+
+    asyncio.run(_wait_for_song_page_interactive(ctx, timeout_seconds=0.1))
+
+    assert ctx.page.load_state_calls == [("networkidle", 10000)]

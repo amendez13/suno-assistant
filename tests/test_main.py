@@ -1030,6 +1030,212 @@ class TestProjectSummary:
         assert ("plan", "song-rename-plan:1:rename-results.json") in events
         assert "save_session" in events
 
+    def test_run_song_download_visit_uses_download_plan(self, monkeypatch, tmp_path: Path) -> None:
+        """Song audio downloads should build their own bounded visit plan."""
+
+        fake_result = VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"suno.song_audio_downloaded": 2},
+            extracted={},
+            step_results=[StepResult(name="download_generated_songs", outcome="ok")],
+        )
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeVisitRunner.result = fake_result
+        FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        output_dir = tmp_path / "audio"
+        output_path = output_dir / "song-downloads.json"
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
+        monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
+        monkeypatch.setattr(
+            main_module,
+            "build_song_download_plan",
+            lambda source_url, output_dir, output_path, download_formats: (
+                f"song-download-plan:{source_url}:{output_dir.name}:{output_path.name}:{download_formats}"
+            ),
+        )
+
+        result = main_module.asyncio.run(
+            main_module.run_song_download_visit(
+                Path("config/config.yaml"),
+                source_url="https://suno.com/playlist/example",
+                output_dir=output_dir,
+                output_path=output_path,
+                download_formats=("mp3", "wav"),
+            )
+        )
+
+        assert result is fake_result
+        assert "session_start" in events
+        assert "start_tracing" in events
+        assert "enable_har_for_session" in events
+        assert (
+            "plan",
+            "song-download-plan:https://suno.com/playlist/example:audio:song-downloads.json:('mp3', 'wav')",
+        ) in events
+        assert "save_session" in events
+
+    def test_run_collection_and_download_return_auth_required_when_session_fails(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Collection/download orchestration should stop cleanly when auth is missing."""
+
+        def resolved_config(config_path, headed=False):  # type: ignore[no-untyped-def]
+            return main_module.ResolvedRunConfig(
+                visitor=SimpleNamespace(observability=SimpleNamespace(mode="off", sessions_dir="data/sessions")),
+                site=SimpleNamespace(name="suno"),
+            )
+
+        for runner_name in ("run_song_collection_visit", "run_song_download_visit"):
+            browser = FakeBrowserManager(None, None)
+            events = browser.events
+            FakeSession.events = events
+            FakeSession.authenticated = False
+            monkeypatch.setattr(main_module, "load_runtime_config", resolved_config)
+            monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None, browser=browser: browser)
+            monkeypatch.setattr(main_module, "Session", FakeSession)
+            monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+            monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: None)
+
+            if runner_name == "run_song_collection_visit":
+                result = main_module.asyncio.run(
+                    main_module.run_song_collection_visit(Path("config/config.yaml"), output_path=tmp_path / "songs.json")
+                )
+            else:
+                result = main_module.asyncio.run(
+                    main_module.run_song_download_visit(
+                        Path("config/config.yaml"),
+                        source_url="https://suno.com/library",
+                        output_dir=tmp_path / "audio",
+                        output_path=tmp_path / "audio" / "song-downloads.json",
+                        download_formats=("mp3",),
+                    )
+                )
+
+            assert result.outcome == "blocked"
+            assert result.error == main_module.AUTH_REQUIRED_MESSAGE
+            assert "save_session" not in events
+            assert "close" in events
+
+    def test_finalize_recording_and_login_result_helpers(self) -> None:
+        """Small main helpers should handle recorder/no-recorder and login outcomes."""
+
+        browser = FakeBrowserManager(None, None)
+        assert main_module.asyncio.run(main_module.finalize_recording(browser, None, None)) is None
+
+        events = browser.events
+        recorder = FakeRecorder(events)
+        failed_result = VisitResult(outcome="failed", error="boom", counters={}, extracted={}, step_results=[])
+        main_module.asyncio.run(main_module.finalize_recording(browser, recorder, failed_result))
+
+        assert "stop_tracing" in events
+        assert "finalize_har" in events
+        assert "finalize_video" in events
+        assert ("recorder_finalize", "failed", "boom") in events
+        assert main_module.build_login_result(authenticated=False).error == (
+            "Suno login did not reach the authenticated create page before timeout."
+        )
+
+    def test_open_session_recorder_builds_suno_run_ref(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Recorder setup should scope session artifacts to the Suno site."""
+
+        captured: dict[str, object] = {}
+
+        def fake_open(*, sessions_dir, mode, run, browser_meta_provider):  # type: ignore[no-untyped-def]
+            captured["sessions_dir"] = sessions_dir
+            captured["mode"] = mode
+            captured["run"] = run
+            captured["browser_meta"] = browser_meta_provider()
+            return "recorder"
+
+        monkeypatch.setattr(main_module.SessionRecorder, "open", fake_open)
+        visitor = SimpleNamespace(observability=SimpleNamespace(mode="always", sessions_dir=str(tmp_path / "sessions")))
+        site = SimpleNamespace(name="suno")
+        browser = FakeBrowserManager(None, None)
+
+        recorder = main_module.open_session_recorder(visitor, site, browser)
+
+        assert recorder == "recorder"
+        assert captured["sessions_dir"] == tmp_path / "sessions" / "suno"
+        assert captured["mode"] == "always"
+        assert captured["browser_meta"] == {"browser": "fake"}
+        run = captured["run"]
+        assert run.plan_name == "suno:create-smoke"
+        assert run.parameters == {"source": "suno_assistant.main"}
+        assert run.site == "suno"
+
+    def test_keep_browser_open_exits_when_page_closes(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The headed keep-open loop should stop once the page reports closed."""
+
+        sleeps: list[float] = []
+
+        class ClosingPage:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def is_closed(self) -> bool:
+                self.calls += 1
+                return self.calls > 1
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
+
+        main_module.asyncio.run(main_module.keep_browser_open(ClosingPage()))
+
+        assert sleeps == [0.5]
+
+    def test_main_rejects_or_reports_invalid_mode_options(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """Invalid result-path and plan/format combinations should return CLI usage errors."""
+
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        assert main_module.main(["--rename-results", str(tmp_path / "rename-results.json")]) == 2
+        assert "use --rename-results together with --rename-songs" in capsys.readouterr().err
+
+        assert main_module.main(["--download-results", str(tmp_path / "downloads.json")]) == 2
+        assert "use --download-results together with --download-songs" in capsys.readouterr().err
+
+        missing_plan = tmp_path / "missing-renames.json"
+        assert main_module.main(["--rename-songs", str(missing_plan)]) == 2
+        assert "Invalid song rename plan:" in capsys.readouterr().err
+
+        invalid_download_args = SimpleNamespace(
+            login=False,
+            fill_only=False,
+            request=None,
+            prompt=None,
+            collect_songs=None,
+            rename_songs=None,
+            download_songs=tmp_path / "audio",
+            download_formats="aac",
+        )
+        assert main_module._run_song_download_mode(invalid_download_args) == 2
+        assert "Invalid song download request:" in capsys.readouterr().err
+
 
 class TestSampleData:
     """Tests demonstrating fixture usage."""
