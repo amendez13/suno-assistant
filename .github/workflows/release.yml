@@ -78,7 +78,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE/repo"
 
       - name: Authorize release actor
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const actor = context.actor;
@@ -145,7 +145,7 @@ jobs:
           fi
 
       - name: Upsert GitHub release with in-progress deployment status
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
           DEPLOY_REF: ${{ steps.context.outputs.deploy_ref }}
@@ -408,7 +408,7 @@ jobs:
 
       - name: Update GitHub release status after successful deploy
         if: success()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
           DEPLOY_TARGET: ${{ steps.context.outputs.target }}
@@ -466,7 +466,7 @@ jobs:
 
       - name: Update GitHub release status after failed deploy
         if: failure()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           RELEASE_TAG: ${{ steps.context.outputs.release_tag }}
           DEPLOY_TARGET: ${{ steps.context.outputs.target }}
