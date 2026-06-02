@@ -65,7 +65,7 @@ This document tracks development phases, tasks, and progress for suno-assistant.
 - [ ] First bounded visit plan
 
 ### Blocked
-- [ ] Private GitHub CI access for `gentle-site-visitor` dependency - requires deploy key or package registry credentials.
+- None.
 
 ---
 

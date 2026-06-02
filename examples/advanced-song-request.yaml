@@ -1,0 +1,20 @@
+prompt: "Local creative brief for an original art pop song about building carefully."
+advanced_mode: true
+title: "Careful Sparks"
+lyrics: |
+  We draw the map before the wire
+  We test the bridge before the road
+  A quiet spark becomes a choir
+  A careful hand can hold the load
+style: "art pop, warm analog synths, crisp drums, bright chorus, expressive female vocal"
+exclude_styles: "metal, harsh noise, aggressive trap"
+vocal_gender: female
+style_mode: manual
+weirdness: 80
+style_influence: 78
+instrumental: false
+count: 1
+tags:
+  - demo
+  - advanced
+notes: "Safe advanced-mode example for fill-only inspection."

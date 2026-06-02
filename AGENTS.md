@@ -101,6 +101,9 @@ account from explicit creative instructions.
 - Do not add platform-policy bypasses, safety-control bypasses, or automation
   whose purpose is to imitate restricted artists or copyrighted works.
 - Treat credentials, cookies, traces, HARs, and storage state as sensitive local artifacts.
+- Treat live smoke runs as operator-controlled actions that can consume account
+  quota or credits; use low-impact original prompts and never stage `data/`
+  artifacts.
 
 ## Development Commands
 
