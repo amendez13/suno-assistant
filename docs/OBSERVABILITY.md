@@ -143,6 +143,70 @@ The purpose is to distinguish queue-empty from queue-blocked, blocked-by-running
 - Need to inspect one specific run?
   Use the app-layer JSONL log or session artifacts when the project adopts that pattern.
 
+## Suno Auth Outcomes
+
+Suno Assistant verifies the saved browser session before running create-page
+workflows. Missing or expired auth returns a blocked run result with:
+
+- outcome: `blocked`
+- counter: `auth_required=1`
+- step: `verify_suno_auth`
+
+The operator action is to rerun the headed login bootstrap:
+
+```bash
+python -m suno_assistant.main --config config/config.yaml --headed --login
+```
+
+The storage state at `data/browser/suno/state.json` is sensitive local data. Do
+not commit it, copy it into issue threads, or include it in PR artifacts.
+
+## Suno Generation Evidence
+
+Request-aware generation runs write Suno-specific events through the active GSV
+evidence sink. With the default session recorder, inspect:
+
+```bash
+ls data/sessions/suno/
+tail -n 20 data/sessions/suno/<session-id>/evidence.jsonl
+```
+
+Current event types:
+
+- `request_loaded`: request id, prompt, prompt hash, title/style flags, count, mode flags, and tags.
+- `generation_submitted`: request id, submit attempt, timestamp, and field summary.
+- `generation_completed`: request id, visible result count, titles, IDs, and URLs when present.
+- `generation_blocked`: request id, phase, block reason, safe visible message, and compact page state.
+- `generation_failed`: request id, phase, error summary, and compact page state when available.
+
+Manifest counters use Suno-specific names:
+
+- `suno.requests_loaded`
+- `suno.requests_submitted`
+- `suno.generations_requested`
+- `suno.generations_detected`
+- `suno.blocked_states_detected`
+- `suno.policy_blocks_detected`
+
+Evidence does not store cookies/storage state, but it can include
+operator-supplied prompt text, visible result metadata, and local audio
+download result paths. Treat `data/sessions/` as sensitive local run history.
+
+### Artifact Review Checklist
+
+After a headed smoke run, inspect the newest session bundle:
+
+```bash
+SESSION_DIR="$(ls -td data/sessions/suno/* | head -n 1)"
+cat "$SESSION_DIR/manifest.json"
+tail -n 50 "$SESSION_DIR/evidence.jsonl"
+```
+
+Confirm that request-aware runs have `request_loaded`,
+`generation_submitted`, and one terminal generation event. Then decide whether
+to keep or purge the local artifacts. Use [MANUAL_SMOKE.md](MANUAL_SMOKE.md) for
+the full live smoke checklist and cleanup commands.
+
 ## Verifying Loki Ingestion
 
 Start with journald:

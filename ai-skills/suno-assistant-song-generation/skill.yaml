@@ -1,0 +1,7 @@
+name: "suno-assistant-song-generation"
+description: Use when turning a user's song idea, style feedback, or parameter changes into a Suno Assistant YAML request and then running the Suno create workflow. Covers iterative song prompting, safe artist-reference translation, Advanced-mode parameters such as style, title, lyrics, exclude styles, vocal gender, weirdness, and style influence, headed fill-only previews, live Create submission, evidence inspection, and screenshot extraction from Suno run artifacts.
+codex:
+  interface:
+    display_name: "suno-assistant Song Generation"
+    short_description: Turn song ideas into Suno YAML and run Create
+    default_prompt: Use $suno-assistant-song-generation to create or revise a Suno song request and run the Suno Assistant create workflow.

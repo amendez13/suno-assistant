@@ -1,0 +1,14 @@
+prompt: "A bright indie pop song about finishing a difficult project and stepping outside at sunrise."
+title: "Sunrise After Launch"
+style: "indie pop, warm synths, steady drums, hopeful chorus"
+lyrics: |
+  The windows glow, the city wakes
+  We leave our doubts beside the stairs
+  A little light is all it takes
+  To find the morning waiting there
+custom_mode: true
+count: 1
+tags:
+  - demo
+  - original
+notes: "Safe example request for local CLI validation and documentation."
