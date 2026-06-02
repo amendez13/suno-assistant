@@ -73,11 +73,35 @@ python -m suno_assistant.main --help
 # Or run the create-page smoke visit
 python -m suno_assistant.main
 
+# Or validate a quick song request before the create-page smoke visit
+python -m suno_assistant.main --prompt "A warm original synth pop song about planning a careful launch."
+
+# Or validate a structured song request before the create-page smoke visit
+python -m suno_assistant.main --request examples/song-request.yaml
+
+# Or fill the create box without submitting generation
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --fill-only \
+  --prompt "A warm original acoustic pop song about planning a careful launch."
+
+# Or fill Advanced mode controls without submitting generation
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --fill-only \
+  --request examples/advanced-song-request.yaml
+
 # Or keep a headed browser open for manual inspection
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
+
+# Or bootstrap your own Suno login session in a headed browser
+python -m suno_assistant.main --config config/config.yaml --headed --login
 ```
 
-The browser storage state is saved locally under `data/browser/suno/state.json` after each run, so non-authenticated session state can be reused on the next launch.
+The browser storage state is saved locally under `data/browser/suno/state.json`
+after authenticated runs, so login state, cookie consent, and other local
+session state can be reused on the next launch.
+
+Before running a live prompt-to-song smoke request, review the operator checklist
+in [MANUAL_SMOKE.md](MANUAL_SMOKE.md). Live request-aware runs can consume Suno
+account quota or credits and write prompt/result metadata into local session
+artifacts.
 
 ## Configuration
 
@@ -98,6 +122,35 @@ sites:
       auth_marker_url: https://suno.com/create
 ```
 
+`auth_marker_url` is the authenticated marker checked before any create-page
+workflow runs. If Suno redirects that URL to login, auth, verification, or a
+third-party provider, the run returns an auth-required blocked result before
+building a generation plan.
+
+### Suno Login Bootstrap
+
+Run the login bootstrap when setting up the project on a new machine or when
+Suno expires the saved browser state:
+
+```bash
+python -m suno_assistant.main --config config/config.yaml --headed --login
+```
+
+Complete the login, MFA, CAPTCHA, or other manual verification in the visible
+browser. Suno Assistant does not type credentials, solve challenges, or bypass
+platform controls. A successful bootstrap persists local storage state under
+`data/browser/suno/state.json`.
+
+Headless login bootstrap is intentionally rejected:
+
+```bash
+python -m suno_assistant.main --login
+# Invalid login request: use --headed --login for manual Suno login bootstrap.
+```
+
+For normal runs, missing or expired auth returns a blocked result and tells the
+operator to rerun the headed login bootstrap.
+
 ### Environment Variables
 
 You can also configure the application using environment variables:
@@ -115,6 +168,63 @@ Both configuration styles are included so a new project can choose the lighter-w
 - Use `.env` when deployment platforms, process managers, or local tooling already revolve around environment variables.
 - `python-dotenv` is included so projects can load a local `.env` file during development without exporting each variable manually.
 - It is reasonable to ship both examples and let the application define precedence between YAML and environment variables.
+
+## Song Request YAML
+
+Structured song requests are separate from runtime configuration and can be
+stored anywhere outside sensitive artifact directories. See
+`examples/song-request.yaml` for a safe example.
+
+Supported fields:
+
+```yaml
+prompt: "Required original-song creative brief."
+title: "Optional local title"
+style: "Optional genre, mood, instrumentation, or arrangement guidance"
+lyrics: "Optional user-provided lyrics"
+instrumental: false
+custom_mode: false
+count: 1
+tags:
+  - demo
+notes: "Optional local-only notes"
+```
+
+The CLI validates requests before starting the browser. Invalid request files,
+empty prompts, unknown fields, unsupported count values, lyrics on instrumental
+requests, or explicit requests to imitate a specific artist or voice return an
+error without launching a Suno browser session.
+
+When a request is supplied and the saved Suno session is authenticated, Suno
+Assistant runs the bounded MVP generation plan:
+
+1. Navigate to `https://suno.com/create`.
+2. Verify the create page is ready and not blocked by auth, quota, or policy states.
+3. Fill the prompt and supported optional fields from the validated request.
+4. Submit one create/generate action.
+5. Wait within a bounded timeout for visible result cards or known blocked states.
+
+The MVP path does not download generated audio, retry around platform blocks, or
+automate CAPTCHA/MFA. Live generation can consume account quota or credits, so
+use low-impact original prompts for manual smoke runs.
+
+Use `--fill-only` with `--prompt` or `--request` to populate supported create
+fields without clicking create/generate. This is useful for headed inspection
+and can still fill the prompt box when the page is authenticated and the prompt
+input is visible but generation submission is blocked by quota.
+
+Set `advanced_mode: true` in a request file to switch to Suno Advanced mode and
+fill deterministic Advanced controls: lyrics, style, exclude styles,
+instrumental, vocal gender, style mode, Weirdness, and Style Influence. The app
+does not operate account asset pickers or generative helper buttons such as
+Audio, Voice, Inspo, saved styles, random prompts, lyrics generation, or
+workspace selection. See [CREATE_BOX.md](CREATE_BOX.md) for the full
+create-page UI contract, including visible-field selection, More Options
+expansion, title filling, and slider setting.
+
+There is no standalone dry-run flag in the MVP CLI. Request validation happens
+before browser startup, and invalid prompt or YAML inputs exit without opening
+Suno.
 
 ## Session Notes
 

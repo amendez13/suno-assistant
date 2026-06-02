@@ -1,0 +1,7 @@
+name: "suno-buddy-song-iteration"
+description: "Use when working through the Suno Buddy song workflow in the automation repo: finding the next Borges poem, proposing song-style directions, creating versioned Suno Assistant request YAMLs and versioned Suno song titles, applying prompt/style/lyrics/parameter feedback, running headed Suno Assistant submissions, collecting and renaming generated song links, writing output notes, committing/pushing tracker data, and deploying the Suno Buddy FastAPI tracker to the Hetzner VPS."
+codex:
+  interface:
+    display_name: "Suno Buddy Song Iteration"
+    short_description: "Plan, generate, and iterate Suno Buddy songs"
+    default_prompt: "Use $suno-buddy-song-iteration to find the next Borges poem or revise the current Suno Buddy song prompt, run Suno Assistant, record outputs, rename duplicate tracks, and deploy the tracker."

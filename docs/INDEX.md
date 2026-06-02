@@ -38,6 +38,19 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 - Verification steps
 - Troubleshooting
 
+**[MANUAL_SMOKE.md](MANUAL_SMOKE.md)**
+- Operator workflow for headed login bootstrap and bounded live smoke runs
+- Prompt/request examples, evidence review, artifact retention, and safety boundaries
+
+**[CREATE_BOX.md](CREATE_BOX.md)**
+- Create-page UI behavior from the operator point of view
+- Basic and Advanced request-to-control mapping, More Options handling, slider behavior, and unsupported controls
+
+**[SONG_LINKS.md](SONG_LINKS.md)**
+- Generated-song link export command
+- JSON, JSONL, and Markdown output formats
+- Metadata-only scope and auth behavior
+
 **[AI_SKILLS.md](AI_SKILLS.md)**
 - Canonical AI skills source tree
 - Dual deployment to Claude and Codex
@@ -130,6 +143,23 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 
 ## Operations
 
+**[MANUAL_SMOKE.md](MANUAL_SMOKE.md)**
+- Headed Suno login bootstrap
+- Bounded prompt-to-song smoke checklist
+- Evidence inspection and local artifact cleanup
+
+**[CREATE_BOX.md](CREATE_BOX.md)**
+- Headed fill-only create-box inspection
+- Advanced mode, More Options, title, Weirdness, and Style Influence behavior
+
+**[SONG_LINKS.md](SONG_LINKS.md)**
+- Authenticated generated-song link collection
+- File output for project tracking without downloading audio
+
+**[SONG_DOWNLOADS.md](SONG_DOWNLOADS.md)**
+- Authenticated playlist and single-song audio download workflow
+- MP3/WAV result reporting and plan-gating behavior
+
 **[OBSERVABILITY.md](OBSERVABILITY.md)**
 - Health endpoint, logging, and Loki query guidance
 - systemd naming and session-artifact conventions
@@ -148,18 +178,23 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 
 ## Project Status
 
-**Current Phase:** Create-page smoke run
+**Current Phase:** MVP prompt-to-song workflow
 - Template instantiated
 - `gentle-site-visitor` dependency wired
 - Suno create-page visit plan wired
+- Suno auth/session bootstrap wired
+- Suno create-page selector and fixture-backed extractor layer wired
+- Request-aware bounded generation plan wired
+- Generation evidence and review artifacts wired
+- Generated-song link collection and file export wired
+- Generated-song audio download workflow wired
 
-**Next Phase:** Suno reference plan
-- Site adapter
-- Selectors and extraction fixtures
-- Headed smoke-run workflow
+**Next Phase:** Live smoke and operations hardening
+- Run the headed manual smoke checklist with the operator's own account
+- Review artifact retention expectations after real runs
 
 **Future:** Operations hardening
-- Private CI dependency pinning
+- Dependency upgrade and release pinning review
 - Deployment target selection
 - Session artifact retention review
 
@@ -180,6 +215,10 @@ Welcome to the suno-assistant documentation. This index provides easy access to 
 |----------|---------|----------|
 | [README.md](../README.md) | Getting started, installation, usage | All users |
 | [SETUP.md](SETUP.md) | Environment configuration | All users |
+| [MANUAL_SMOKE.md](MANUAL_SMOKE.md) | Headed login, live smoke checks, artifact review | Operators, developers |
+| [CREATE_BOX.md](CREATE_BOX.md) | Create UI behavior and Advanced control mapping | Operators, developers |
+| [SONG_LINKS.md](SONG_LINKS.md) | Generated-song link export workflow | Operators, developers |
+| [SONG_DOWNLOADS.md](SONG_DOWNLOADS.md) | Playlist and single-song audio download workflow | Operators, developers |
 | [AI_SKILLS.md](AI_SKILLS.md) | AI skill source, deploy, and starter-skill guide | Developers |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Technical architecture and design | Developers |
 | [CI.md](CI.md) | CI/CD pipeline and development workflow | Developers |

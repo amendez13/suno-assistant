@@ -251,25 +251,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Configure private dependency SSH
-        env:
-          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
-        run: |
-          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
-            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
-            exit 1
-          fi
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
-          chmod 600 ~/.ssh/gsv_dependency_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          {
-            echo "Host github.com"
-            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
-            echo "  IdentitiesOnly yes"
-          } >> ~/.ssh/config
-
       - name: Create pinned lint tool venv
         run: |
           python3 -m venv .lint-venv
@@ -337,25 +318,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Configure private dependency SSH
-        env:
-          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
-        run: |
-          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
-            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
-            exit 1
-          fi
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
-          chmod 600 ~/.ssh/gsv_dependency_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          {
-            echo "Host github.com"
-            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
-            echo "  IdentitiesOnly yes"
-          } >> ~/.ssh/config
-
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
@@ -422,25 +384,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Configure private dependency SSH
-        env:
-          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
-        run: |
-          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
-            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
-            exit 1
-          fi
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
-          chmod 600 ~/.ssh/gsv_dependency_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          {
-            echo "Host github.com"
-            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
-            echo "  IdentitiesOnly yes"
-          } >> ~/.ssh/config
-
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
@@ -487,25 +430,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Configure private dependency SSH
-        env:
-          GSV_DEPENDENCY_SSH_KEY: ${{ secrets.GSV_DEPENDENCY_SSH_KEY }}
-        run: |
-          if [ -z "${GSV_DEPENDENCY_SSH_KEY}" ]; then
-            echo "::error::Missing GSV_DEPENDENCY_SSH_KEY secret for gentle-site-visitor dependency access."
-            exit 1
-          fi
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${GSV_DEPENDENCY_SSH_KEY}" > ~/.ssh/gsv_dependency_key
-          chmod 600 ~/.ssh/gsv_dependency_key
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-          {
-            echo "Host github.com"
-            echo "  IdentityFile ~/.ssh/gsv_dependency_key"
-            echo "  IdentitiesOnly yes"
-          } >> ~/.ssh/config
 
       - name: Install security tools
         run: python -m pip install bandit==1.7.6 pip-audit==2.7.3
