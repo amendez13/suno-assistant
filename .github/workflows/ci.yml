@@ -14,9 +14,10 @@ on:
       runner_target:
         description: Runner target for this manual CI run
         required: false
-        default: "github_hosted"
+        default: "fargate"
         type: choice
         options:
+          - fargate
           - github_hosted
           - self_hosted_linux
           - self_hosted_linux_arm64
@@ -32,12 +33,12 @@ permissions:
   pull-requests: read
 
 env:
-  DEFAULT_RUNNER: "github_hosted"
+  DEFAULT_RUNNER: "fargate"
 
 jobs:
   resolve-runner:
     name: Resolve Runner Target
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, fargate]
     outputs:
       runner: ${{ steps.pick.outputs.runner }}
       target: ${{ steps.pick.outputs.target }}
@@ -57,6 +58,11 @@ jobs:
           fi
 
           case "$TARGET" in
+            fargate)
+              echo 'runner=["self-hosted","fargate"]' >> "$GITHUB_OUTPUT"
+              echo 'target=fargate' >> "$GITHUB_OUTPUT"
+              echo 'container_options=' >> "$GITHUB_OUTPUT"
+              ;;
             github_hosted)
               echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
               echo 'target=github_hosted' >> "$GITHUB_OUTPUT"
@@ -73,9 +79,9 @@ jobs:
               echo 'container_options=--user 1001:1001 --platform linux/arm64' >> "$GITHUB_OUTPUT"
               ;;
             *)
-              echo "::warning::Unknown runner target '$TARGET'. Falling back to github_hosted."
-              echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-              echo 'target=github_hosted' >> "$GITHUB_OUTPUT"
+              echo "::warning::Unknown runner target '$TARGET'. Falling back to fargate."
+              echo 'runner=["self-hosted","fargate"]' >> "$GITHUB_OUTPUT"
+              echo 'target=fargate' >> "$GITHUB_OUTPUT"
               echo 'container_options=' >> "$GITHUB_OUTPUT"
               ;;
           esac
