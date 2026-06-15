@@ -21,7 +21,7 @@ env:
 jobs:
   gitleaks:
     name: Secret Scanning
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, fargate]
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -38,14 +38,14 @@ jobs:
           curl -sSL -o "${archive}" "${url}"
           echo "${GITLEAKS_LINUX_X64_SHA256}  ${archive}" | sha256sum -c -
 
-          tar -xzf "${archive}" gitleaks LICENSE README.md
-          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          tar -xzf "${archive}" gitleaks
+          chmod +x gitleaks
 
       - name: Scan git history with gitleaks
         id: scan
         continue-on-error: true
         run: |
-          gitleaks git . \
+          ./gitleaks git . \
             --no-banner \
             --redact=100 \
             --report-format sarif \
