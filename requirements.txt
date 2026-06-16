@@ -1,6 +1,6 @@
 # Core dependencies
 PyYAML>=6.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 
 # Framework dependency.
 # Local development may also install ../gentle-site-visitor in editable mode.
