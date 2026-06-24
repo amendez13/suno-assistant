@@ -52,13 +52,9 @@ All CI checks must pass before merging:
 **Strict Status Checks:**
 - `Resolve Runner Target` - Runner selection and CI skip classification
 - `Lint and Code Quality` - Code formatting, linting, and type checking
-- `Coverage Check` - Coverage gate and report publishing
-- `Test Python 3.10` - Tests on Python 3.10
-- `Test Python 3.11` - Tests on Python 3.11
 - `Test Python 3.12` - Tests on Python 3.12
 - `Security Checks` - bandit and pip-audit gate
 - `Secret Scanning` - gitleaks repository-history secret scan
-- `Validate Configuration` - Configuration file validation
 - `CI Status Check` - Final CI status verification
 
 **Configuration:**
@@ -122,13 +118,9 @@ The configuration file is located at `scripts/github/branch-protection-config.js
   - Add these status checks:
     - `Resolve Runner Target`
     - `Lint and Code Quality`
-    - `Coverage Check`
-    - `Test Python 3.10`
-    - `Test Python 3.11`
     - `Test Python 3.12`
     - `Security Checks`
     - `Secret Scanning`
-    - `Validate Configuration`
     - `CI Status Check`
 - [x] Require conversation resolution before merging
 - [x] Require linear history

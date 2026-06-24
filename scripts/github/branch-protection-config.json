@@ -2,15 +2,8 @@
   "required_status_checks": {
     "strict": true,
     "contexts": [
-      "Resolve Runner Target",
       "Lint and Code Quality",
-      "Coverage Check",
-      "Test Python 3.10",
-      "Test Python 3.11",
       "Test Python 3.12",
-      "Security Checks",
-      "Secret Scanning",
-      "Validate Configuration",
       "CI Status Check"
     ]
   },

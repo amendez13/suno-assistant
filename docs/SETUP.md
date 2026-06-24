@@ -4,7 +4,7 @@ This guide walks you through setting up suno-assistant for development or usage.
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- Python 3.12 or higher
 - pip (Python package installer)
 - git
 
