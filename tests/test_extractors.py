@@ -81,6 +81,7 @@ def test_extracts_completed_result_cards() -> None:
     [
         ("quota_unavailable.html", "quota_unavailable"),
         ("policy_rejected.html", "policy_rejected"),
+        ("manual_verification.html", "manual_verification_required"),
     ],
 )
 def test_classifies_blocked_states(fixture_name: str, reason: str) -> None:
@@ -90,6 +91,16 @@ def test_classifies_blocked_states(fixture_name: str, reason: str) -> None:
     assert state.blocked_reason == reason
     assert state.blocked_message
     assert state.ready_for_prompt is False
+
+
+def test_ignores_sidebar_upgrade_copy_when_create_is_enabled() -> None:
+    """Upgrade marketing copy should not become a quota block by itself."""
+    state = classify_create_page_html(load_fixture("create_ready_with_upgrade_copy.html"))
+
+    assert state.authenticated is True
+    assert state.blocked_reason is None
+    assert state.create_button_enabled is True
+    assert state.ready_for_prompt is True
 
 
 def test_async_page_extractor_reads_loaded_page_content() -> None:

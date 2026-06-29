@@ -49,6 +49,20 @@ class TestSunoVisitPlan:
         ]
         assert plan.outcome_classifier is visit_module.classify_generation_outcome
 
+    def test_build_plan_can_inspect_before_submit_without_clicking(self) -> None:
+        """Confirm-submit runs should record submit readiness and stop before Create."""
+        request = visit_module.SongRequest.from_prompt("An original synth pop song about a careful launch.")
+
+        plan = visit_module.build_plan(song_request=request, confirm_submit=True)
+
+        assert [step.name for step in plan.steps] == [
+            "navigate_create_page",
+            "verify_create_page_ready",
+            "fill_suno_request",
+            "pre_submit_inspection",
+        ]
+        assert plan.outcome_classifier is visit_module.classify_generation_outcome
+
     def test_build_plan_switches_to_advanced_for_advanced_requests(self) -> None:
         """Advanced-mode requests should switch tabs before readiness and fill steps."""
         request = visit_module.SongRequest.from_mapping(

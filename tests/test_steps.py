@@ -38,6 +38,7 @@ from suno_assistant.steps import (
     CollectGeneratedSongLinks,
     DownloadGeneratedSongs,
     FillSunoRequest,
+    PreSubmitInspection,
     RenameGeneratedSongs,
     SelectAdvancedMode,
     SubmitGeneration,
@@ -45,6 +46,7 @@ from suno_assistant.steps import (
     VerifyCreatePageReady,
     WaitForGenerationResult,
     _click_first_available,
+    _click_locator,
     _collect_song_links_until_stable,
     _dismiss_song_overlay,
     _download_generated_song_audio,
@@ -59,9 +61,13 @@ from suno_assistant.steps import (
     _open_song_title_editor,
     _page_scroll_height,
     _page_viewport_width,
+    _pre_submit_diagnostics,
     _ranked_song_menu_candidates,
     _resolve_song_download_targets,
+    _safe_url_path,
     _song_menu_candidate_sort_key,
+    _type_into_locator,
+    _typing_delay_ms,
     _unique_download_output_path,
     _wait_for_song_page_interactive,
     classify_generation_outcome,
@@ -205,6 +211,10 @@ class FakePage:
         viewport_size: dict[str, int] | None = None,
         evaluate_values: list[Any] | None = None,
         evaluate_error: bool = False,
+        supports_keyboard_type: bool = False,
+        keyboard_type_raises: bool = False,
+        supports_mouse_move: bool = False,
+        mouse_move_raises: bool = False,
     ) -> None:
         self.fixture_names = fixture_names
         self.available_selectors = selectors or set()
@@ -221,6 +231,9 @@ class FakePage:
         self.viewport_size = viewport_size
         self.evaluate_values = evaluate_values or []
         self.evaluate_error = evaluate_error
+        self.keyboard_type_raises = keyboard_type_raises
+        self.mouse_move_raises = mouse_move_raises
+        self.url = "https://suno.com/create"
         self.content_calls = 0
         self.load_state_calls: list[tuple[str, int]] = []
         self.evaluate_calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -229,10 +242,18 @@ class FakePage:
         self.clicks: list[str] = []
         self.focuses: list[str] = []
         self.mouse_clicks: list[tuple[float, float]] = []
+        self.mouse_moves: list[tuple[float, float, int]] = []
         self.gotos: list[str] = []
-        self.mouse = SimpleNamespace(click=self._mouse_click)
+        if supports_mouse_move:
+            self.mouse = SimpleNamespace(click=self._mouse_click, move=self._mouse_move)
+        else:
+            self.mouse = SimpleNamespace(click=self._mouse_click)
         self.keyboard_presses: list[str] = []
-        self.keyboard = SimpleNamespace(press=self._keyboard_press)
+        self.typed_texts: list[tuple[str, int]] = []
+        if supports_keyboard_type:
+            self.keyboard = SimpleNamespace(press=self._keyboard_press, type=self._keyboard_type)
+        else:
+            self.keyboard = SimpleNamespace(press=self._keyboard_press)
         self.next_download = FakeDownload()
         self.expect_download_raises: Exception | None = None
 
@@ -266,8 +287,18 @@ class FakePage:
     async def _mouse_click(self, x: float, y: float) -> None:
         self.mouse_clicks.append((x, y))
 
+    async def _mouse_move(self, x: float, y: float, steps: int = 1) -> None:
+        if self.mouse_move_raises:
+            raise RuntimeError("mouse move failed")
+        self.mouse_moves.append((x, y, steps))
+
     async def _keyboard_press(self, key: str) -> None:
         self.keyboard_presses.append(key)
+
+    async def _keyboard_type(self, text: str, delay: int = 0) -> None:
+        if self.keyboard_type_raises:
+            raise RuntimeError("keyboard type failed")
+        self.typed_texts.append((text, delay))
 
 
 class FakeContext(SimpleNamespace):
@@ -468,6 +499,73 @@ def test_fill_first_available_skips_hidden_duplicate_controls() -> None:
     assert page.fill_indexes == [(selector, 1)]
 
 
+def test_fill_first_available_uses_keyboard_type_and_jitter_click() -> None:
+    """Real browser paths should prefer visible click geometry and keyboard text entry."""
+    selector = TITLE_INPUT_SELECTORS.selectors[0]
+    page = FakePage(
+        ["create_ready.html"],
+        selectors={selector},
+        supports_keyboard_type=True,
+        supports_mouse_move=True,
+    )
+
+    filled = asyncio.run(_fill_first_available(page, (selector,), "Careful Sparks"))
+
+    assert filled is True
+    assert page.fills == [(selector, "")]
+    assert page.typed_texts == [("Careful Sparks", 30)]
+    assert page.clicks == []
+    assert page.mouse_moves
+    assert page.mouse_clicks
+
+
+def test_fill_first_available_falls_back_when_keyboard_type_fails() -> None:
+    """Keyboard typing failures should fall back to the established locator fill path."""
+    selector = TITLE_INPUT_SELECTORS.selectors[0]
+    page = FakePage(
+        ["create_ready.html"],
+        selectors={selector},
+        supports_keyboard_type=True,
+        keyboard_type_raises=True,
+    )
+
+    filled = asyncio.run(_fill_first_available(page, (selector,), "Fallback Title"))
+
+    assert filled is True
+    assert page.fills == [(selector, ""), (selector, "Fallback Title")]
+    assert page.typed_texts == []
+
+
+def test_click_locator_falls_back_when_pointer_move_fails() -> None:
+    """Pointer-jitter failures should fall back to a normal locator click."""
+    selector = CREATE_BUTTON_SELECTORS.selectors[0]
+    page = FakePage(
+        ["create_ready.html"],
+        selectors={selector},
+        supports_mouse_move=True,
+        mouse_move_raises=True,
+    )
+    target = page.locator(selector).first
+
+    asyncio.run(_click_locator(page, target))
+
+    assert page.clicks == [selector]
+
+
+def test_type_and_diagnostic_small_helpers() -> None:
+    """Small helper branches should stay covered without live browser work."""
+    selector = TITLE_INPUT_SELECTORS.selectors[0]
+    page = FakePage(["create_ready.html"], selectors={selector})
+    target = page.locator(selector).first
+
+    typed = asyncio.run(_type_into_locator(page, target, "No keyboard API"))
+
+    assert typed is False
+    assert _typing_delay_ms(None) == 30
+    assert _safe_url_path("") == ""
+    assert _safe_url_path("create?draft=1") == "create"
+
+
 def test_fill_suno_request_fills_advanced_controls() -> None:
     """Advanced requests should fill deterministic text, button, and slider controls."""
     request = SongRequest.from_mapping(
@@ -641,14 +739,15 @@ def test_fill_suno_request_requires_prompt_selector() -> None:
 
 def test_submit_generation_requires_create_button_selector() -> None:
     """Submitting should fail clearly when no create selector matches."""
-    ctx = make_ctx(FakePage(["create_ready.html"], selectors=set()))
+    ctx = make_ctx(FakePage(["create_no_button.html"], selectors=set()))
     request = SongRequest.from_prompt("An original song about a missing submit selector.")
 
     result = asyncio.run(SubmitGeneration(request).execute(ctx))
 
     assert result.outcome == "fail"
-    assert result.error == "Create button selector not found"
-    assert ctx.sink.events[0][0] == "generation_failed"
+    assert result.error == "Create button is not visible"
+    assert ctx.sink.events[0][0] == "generation_pre_submit"
+    assert ctx.sink.events[1][0] == "generation_failed"
 
 
 def test_submit_generation_clicks_create_button_and_records_event() -> None:
@@ -661,9 +760,102 @@ def test_submit_generation_clicks_create_button_and_records_event() -> None:
     assert result.outcome == "ok"
     assert ctx.counters == {"suno.requests_submitted": 1}
     assert ctx.page.clicks == [CREATE_BUTTON_SELECTORS.selectors[0]]
-    assert ctx.sink.events[0][0] == "generation_submitted"
-    assert ctx.sink.events[0][1]["attempt"] == 1
-    assert ctx.sink.events[0][1]["request_id"]
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_submitted"]
+    assert ctx.sink.events[1][1]["attempt"] == 1
+    assert ctx.sink.events[1][1]["request_id"]
+    assert ctx.sink.events[1][1]["pre_submit_diagnostics"]["url_path"] == "/create"
+
+
+def test_pre_submit_inspection_records_diagnostics_without_clicking_create() -> None:
+    """Confirm-submit mode should stop before the high-value create action."""
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about inspecting before submit.")
+
+    result = asyncio.run(PreSubmitInspection(request).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert result.extracted["submit_deferred"] is True
+    assert ctx.page.clicks == []
+    assert ctx.sink.events[0][0] == "generation_pre_submit"
+    assert ctx.sink.events[0][1]["diagnostics"]["create_button_enabled"] is True
+
+
+def test_pre_submit_inspection_blocks_manual_verification_without_clicking() -> None:
+    """Confirm-submit mode should record and stop on visible manual verification."""
+    ctx = make_ctx(FakePage(["manual_verification.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about inspection blocks.")
+
+    result = asyncio.run(PreSubmitInspection(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "blocked:manual_verification_required"
+    assert ctx.page.clicks == []
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_blocked"]
+
+
+def test_pre_submit_diagnostics_records_timing_values() -> None:
+    """Submit diagnostics should include safe path and monotonic timing values."""
+    page = FakePage(["create_ready.html"])
+    page.url = "https://suno.com/create?draft=abc"
+    ctx = make_ctx(page)
+    ctx.extracted["suno_request_advanced_mode"] = True
+    ctx.extracted["suno_request_loaded_monotonic"] = 10.0
+    ctx.extracted["suno_create_page_ready_monotonic"] = 9.0
+    state = steps_module.CreatePageState(
+        authenticated=True,
+        prompt_input_visible=True,
+        create_button_visible=True,
+        create_button_enabled=True,
+    )
+
+    diagnostics = asyncio.run(_pre_submit_diagnostics(ctx, state))
+
+    assert diagnostics["url_path"] == "/create"
+    assert diagnostics["advanced_mode"] is True
+    assert diagnostics["seconds_since_request_loaded"] >= 0
+    assert diagnostics["seconds_since_ready_check"] >= diagnostics["seconds_since_request_loaded"]
+
+
+def test_submit_generation_rejects_disabled_create_button_after_pre_submit() -> None:
+    """Submit should fail before click when the create button is visible but disabled."""
+    ctx = make_ctx(FakePage(["create_disabled.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about a disabled submit.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Create button is disabled"
+    assert ctx.page.clicks == []
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_failed"]
+
+
+def test_submit_generation_reports_create_selector_disappearing_after_state_check() -> None:
+    """Submit should report selector drift if state has a button but selectors no longer match."""
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors=set()))
+    request = SongRequest.from_prompt("An original song about selector drift.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Create button selector not found"
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_failed"]
+
+
+def test_submit_generation_blocks_manual_verification_before_clicking() -> None:
+    """Manual verification should be reported as blocked and never clicked around."""
+    ctx = make_ctx(FakePage(["manual_verification.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about verification.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "blocked:manual_verification_required"
+    assert ctx.page.clicks == []
+    assert ctx.counters == {
+        "suno.blocked_states_detected": 1,
+        "suno.manual_verification_blocks_detected": 1,
+    }
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_blocked"]
 
 
 def test_first_locator_falls_back_when_locator_has_no_first_property() -> None:

@@ -20,6 +20,9 @@ Both modes can run with or without submission:
   state.
 - `--fill-only` fills supported fields and stops before clicking
   Create/Generate. Use it for headed inspection and manual confirmation.
+- `--confirm-submit` fills supported fields, records pre-submit diagnostics,
+  and stops before clicking Create/Generate. Use it when diagnosing first-submit
+  challenge behavior without spending a generation attempt.
 
 ## Request-To-UI Mapping
 
@@ -65,6 +68,17 @@ python -m suno_assistant.main \
   --request examples/advanced-song-request.yaml
 ```
 
+For pre-submit diagnostics without an automatic Create click:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --confirm-submit \
+  --request examples/advanced-song-request.yaml
+```
+
 ## Advanced UI Behavior
 
 The Advanced tab renders several controls that matter for reliable automation:
@@ -106,14 +120,21 @@ manually in the headed browser after `--fill-only` leaves the page open.
 Create-box actions stay bounded and paced:
 
 - The app verifies the saved authenticated session before create-page work.
+- Request-aware create runs use the framework post-login warmup before the
+  create plan starts.
 - Request validation happens before browser startup.
 - Fill-only mode never clicks Create/Generate.
+- Confirm-submit mode records submit-readiness diagnostics and then stops before
+  Create/Generate.
 - Submission mode performs one create action and waits within a bounded timeout.
-- Advanced field actions include short, human-cadence pauses.
+- Text entry, clicks, and Advanced field actions prefer visible controls,
+  geometry-based pointer movement when available, keyboard typing, and short
+  human-cadence pauses.
 - Slider changes use focused keyboard nudges instead of rapid direct DOM
   mutation.
-- Known auth, quota, disabled-control, and policy states are recorded as
-  explicit blocked/failed outcomes instead of being retried around.
+- Known auth, manual verification, quota, disabled-control, and policy states
+  are recorded as explicit blocked/failed outcomes instead of being retried
+  around.
 
 Session artifacts can include prompts, traces, HARs, visible result metadata,
 and storage-state diagnostics. Keep `data/` local and untracked.

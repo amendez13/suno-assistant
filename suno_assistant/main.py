@@ -96,6 +96,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fill a validated song request into the create page without clicking create/generate.",
     )
     parser.add_argument(
+        "--confirm-submit",
+        action="store_true",
+        help=("Fill a validated song request, record pre-submit diagnostics, and stop before clicking create/generate."),
+    )
+    parser.add_argument(
         "--collect-songs",
         type=Path,
         metavar="OUTPUT",
@@ -237,6 +242,7 @@ async def run_create_visit(
     login: bool = False,
     song_request: SongRequest | None = None,
     fill_only: bool = False,
+    confirm_submit: bool = False,
 ) -> VisitResult:
     """Run a single Suno create-page visit through the gsv runtime."""
     resolved = load_runtime_config(config_path, headed=headed)
@@ -257,6 +263,9 @@ async def run_create_visit(
                 page = await browser.new_page()
                 await keep_browser_open(page)
             return visit_result
+        post_login_warmup = getattr(session, "post_login_warmup", None)
+        if callable(post_login_warmup):
+            await post_login_warmup()
         await browser.enable_har_for_session()
         await browser.start_tracing()
         page = await browser.new_page()
@@ -269,7 +278,9 @@ async def run_create_visit(
             rng=random.Random(),
             recorder=recorder,
         )
-        visit_result = await VisitRunner(visit_ctx).run(build_create_plan(song_request=song_request, fill_only=fill_only))
+        visit_result = await VisitRunner(visit_ctx).run(
+            build_create_plan(song_request=song_request, fill_only=fill_only, confirm_submit=confirm_submit)
+        )
         if keep_open:
             await keep_browser_open(page)
         return visit_result
@@ -434,7 +445,7 @@ def _run_song_collection_mode(args: argparse.Namespace) -> int:
     if _collect_songs_conflicts(args):
         print(
             "Invalid song collection request: use --collect-songs without "
-            "--login, --fill-only, --prompt, --request, or --rename-songs.",
+            "--login, --fill-only, --confirm-submit, --prompt, --request, or --rename-songs.",
             file=sys.stderr,
         )
         return 2
@@ -457,7 +468,8 @@ def _run_song_collection_mode(args: argparse.Namespace) -> int:
 def _run_song_rename_mode(args: argparse.Namespace) -> int:
     if _rename_songs_conflicts(args):
         print(
-            "Invalid song rename request: use --rename-songs without --login, --fill-only, --prompt, or --request.",
+            "Invalid song rename request: use --rename-songs without --login, --fill-only, --confirm-submit, "
+            "--prompt, or --request.",
             file=sys.stderr,
         )
         return 2
@@ -486,8 +498,8 @@ def _run_song_rename_mode(args: argparse.Namespace) -> int:
 def _run_song_download_mode(args: argparse.Namespace) -> int:
     if _download_songs_conflicts(args):
         print(
-            "Invalid song download request: use --download-songs without --login, --fill-only, --prompt, "
-            "--request, --collect-songs, or --rename-songs.",
+            "Invalid song download request: use --download-songs without --login, --fill-only, --confirm-submit, "
+            "--prompt, --request, --collect-songs, or --rename-songs.",
             file=sys.stderr,
         )
         return 2
@@ -520,6 +532,7 @@ def _collect_songs_conflicts(args: argparse.Namespace) -> bool:
     return bool(
         args.login
         or args.fill_only
+        or args.confirm_submit
         or args.request is not None
         or args.prompt is not None
         or args.rename_songs is not None
@@ -531,6 +544,7 @@ def _rename_songs_conflicts(args: argparse.Namespace) -> bool:
     return bool(
         args.login
         or args.fill_only
+        or args.confirm_submit
         or args.request is not None
         or args.prompt is not None
         or args.collect_songs is not None
@@ -542,6 +556,7 @@ def _download_songs_conflicts(args: argparse.Namespace) -> bool:
     return bool(
         args.login
         or args.fill_only
+        or args.confirm_submit
         or args.request is not None
         or args.prompt is not None
         or args.collect_songs is not None
@@ -585,6 +600,12 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatc
     if args.fill_only and song_request is None:
         print("Invalid fill-only request: use --prompt or --request with --fill-only.", file=sys.stderr)
         return 2
+    if args.confirm_submit and song_request is None:
+        print("Invalid confirm-submit request: use --prompt or --request with --confirm-submit.", file=sys.stderr)
+        return 2
+    if args.confirm_submit and args.fill_only:
+        print("Invalid create request: use either --confirm-submit or --fill-only, not both.", file=sys.stderr)
+        return 2
 
     result = asyncio.run(
         run_create_visit(
@@ -594,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatc
             login=args.login,
             song_request=song_request,
             fill_only=args.fill_only,
+            confirm_submit=args.confirm_submit,
         )
     )
     print(f"Run {result.outcome}: {describe_project().site_name}")

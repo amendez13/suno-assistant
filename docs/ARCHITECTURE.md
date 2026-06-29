@@ -71,7 +71,8 @@ flowchart LR
 - Choose bounded Suno create-page workflows.
 - Fill Basic or deterministic Advanced-mode controls from a validated song request.
 - Submit one bounded generation request when a validated song request is
-  supplied and the run is not fill-only.
+  supplied and the run is not fill-only or confirm-submit.
+- Record pre-submit diagnostics before any Create click.
 - Collect visible generated-song titles and links into operator-selected files
   for downstream project tracking.
 - Construct GSV `VisitPlan` instances.
@@ -114,28 +115,32 @@ observability mechanics.
    before building or executing any generation plan.
 5. Suno Assistant classifies the loaded create-page state with centralized
    selectors and extraction helpers.
-6. Known page blocks such as auth-required, quota unavailable, policy rejection,
-   disabled controls, or missing prompt controls are surfaced as explicit states.
+6. Known page blocks such as auth-required, manual verification, quota
+   unavailable, policy rejection, disabled controls, or missing prompt controls
+   are surfaced as explicit states.
 7. When a request is present, Suno Assistant fills supported create-page fields
-   and submits one create/generate action.
+   and records pre-submit diagnostics before any create/generate action.
 8. In `--fill-only` mode, Suno Assistant stops after field fill and never
    submits generation.
-9. Advanced-mode requests select the Advanced tab, fill visible text inputs,
+9. In `--confirm-submit` mode, Suno Assistant records submit readiness after
+   field fill and stops before Create/Generate.
+10. Normal submit mode submits one create/generate action and waits within a
+   bounded timeout for result cards or known blocked states.
+11. Advanced-mode requests select the Advanced tab, fill visible text inputs,
    expand More Options by its `aria-expanded` state when needed, and set sliders
    from their `aria-valuenow` values with keyboard nudges.
-10. Suno Assistant waits within a bounded timeout for result cards or known blocked states.
-11. With `--collect-songs`, Suno Assistant navigates to the configured Suno
+12. With `--collect-songs`, Suno Assistant navigates to the configured Suno
    song-listing page, extracts visible song-card titles and links, normalizes
    Suno URLs, and writes JSON, JSONL, or Markdown output without downloading
    media.
-12. With `--download-songs`, Suno Assistant navigates to a playlist, song-list,
+13. With `--download-songs`, Suno Assistant navigates to a playlist, song-list,
    or single-song source URL, resolves song URLs, then visits each song page
    and uses visible `More -> Download` controls to save MP3 and/or WAV when the
    account is allowed to do so.
-13. Suno Assistant builds a request-aware, song-link collection, song-download,
+14. Suno Assistant builds a request-aware, song-link collection, song-download,
    or song-rename GSV `VisitPlan`.
-14. GSV executes the plan through browser/session/pacing/observability layers.
-15. Suno Assistant writes request, submit, completed, blocked, failed,
+15. GSV executes the plan through browser/session/pacing/observability layers.
+16. Suno Assistant writes request, submit, completed, blocked, failed,
    `song_links_collected`, `song_downloads_completed`, or
    `song_downloads_failed` evidence rows.
 16. Operators review evidence rows and run artifacts from the local GSV session bundle.

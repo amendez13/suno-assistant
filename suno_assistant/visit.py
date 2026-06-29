@@ -16,6 +16,7 @@ from .steps import (
     CollectGeneratedSongLinks,
     DownloadGeneratedSongs,
     FillSunoRequest,
+    PreSubmitInspection,
     RenameGeneratedSongs,
     SelectAdvancedMode,
     SubmitGeneration,
@@ -37,6 +38,7 @@ def build_plan(
     *,
     song_request: SongRequest | None = None,
     fill_only: bool = False,
+    confirm_submit: bool = False,
 ) -> VisitPlan:
     """Build the first bounded Suno plan."""
     del ctx
@@ -51,7 +53,9 @@ def build_plan(
             steps.append(SelectAdvancedMode(song_request))
         verify_step = VerifyCreatePageFillable(song_request) if fill_only else VerifyCreatePageReady(song_request)
         steps.extend([verify_step, FillSunoRequest(song_request)])
-        if not fill_only:
+        if confirm_submit:
+            steps.append(PreSubmitInspection(song_request))
+        elif not fill_only:
             steps.extend([SubmitGeneration(song_request), WaitForGenerationResult(song_request)])
     return VisitPlan(
         steps=steps,

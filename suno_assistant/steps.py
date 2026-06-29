@@ -17,6 +17,7 @@ from .evidence import (
     generation_blocked_payload,
     generation_completed_payload,
     generation_failed_payload,
+    generation_pre_submit_payload,
     generation_submitted_payload,
     request_loaded_payload,
     song_downloads_completed_payload,
@@ -77,6 +78,7 @@ class VerifyCreatePageReady:
         """Extract and validate the current create-page state."""
         state = await extract_create_page_state(ctx.page)
         ctx.extracted["suno_create_state"] = state
+        ctx.extracted["suno_create_page_ready_monotonic"] = time.monotonic()
         if state.blocked_reason is not None:
             _increment_blocked_counters(ctx, state)
             await ctx.sink.write("generation_blocked", generation_blocked_payload(self.request, phase=self.name, state=state))
@@ -102,6 +104,7 @@ class VerifyCreatePageFillable:
         """Allow filling visible prompt controls without requiring submission readiness."""
         state = await extract_create_page_state(ctx.page)
         ctx.extracted["suno_create_state"] = state
+        ctx.extracted["suno_create_page_ready_monotonic"] = time.monotonic()
         if not state.authenticated:
             await ctx.sink.write("generation_blocked", generation_blocked_payload(self.request, phase=self.name, state=state))
             return StepResult(name=self.name, outcome="fail", error="blocked:auth_required", extracted=state)
@@ -140,7 +143,7 @@ class SelectAdvancedMode:
 
     async def execute(self, ctx: VisitContext) -> StepResult:
         """Click the Advanced tab when an advanced request needs it."""
-        clicked = await _click_first_available(ctx.page, ADVANCED_TAB_SELECTORS.selectors)
+        clicked = await _click_first_available(ctx.page, ADVANCED_TAB_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         if not clicked:
             await ctx.sink.write(
                 "generation_failed",
@@ -165,31 +168,43 @@ class FillSunoRequest:
             return await self._execute_advanced(ctx)
 
         if self.request.custom_mode:
-            await _click_optional(ctx.page, CUSTOM_MODE_SELECTORS.selectors)
-        if not await _fill_first_available(ctx.page, PROMPT_INPUT_SELECTORS.selectors, self.request.prompt):
+            await _click_optional(ctx.page, CUSTOM_MODE_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+            await _gentle_action_pause(ctx)
+        if not await _fill_first_available(
+            ctx.page, PROMPT_INPUT_SELECTORS.selectors, self.request.prompt, rng=getattr(ctx, "rng", None)
+        ):
             await ctx.sink.write(
                 "generation_failed",
                 generation_failed_payload(self.request, phase=self.name, error="Prompt input selector not found"),
             )
             return StepResult(name=self.name, outcome="fail", error="Prompt input selector not found")
+        await _gentle_action_pause(ctx)
         if self.request.style is not None:
-            filled_style = await _fill_first_available(ctx.page, STYLE_INPUT_SELECTORS.selectors, self.request.style)
+            filled_style = await _fill_first_available(
+                ctx.page, STYLE_INPUT_SELECTORS.selectors, self.request.style, rng=getattr(ctx, "rng", None)
+            )
             if not filled_style:
                 await ctx.sink.write(
                     "generation_failed",
                     generation_failed_payload(self.request, phase=self.name, error="Style input selector not found"),
                 )
                 return StepResult(name=self.name, outcome="fail", error="Style input selector not found")
+            await _gentle_action_pause(ctx)
         if self.request.lyrics is not None:
-            filled_lyrics = await _fill_first_available(ctx.page, LYRICS_INPUT_SELECTORS.selectors, self.request.lyrics)
+            filled_lyrics = await _fill_first_available(
+                ctx.page, LYRICS_INPUT_SELECTORS.selectors, self.request.lyrics, rng=getattr(ctx, "rng", None)
+            )
             if not filled_lyrics:
                 await ctx.sink.write(
                     "generation_failed",
                     generation_failed_payload(self.request, phase=self.name, error="Lyrics input selector not found"),
                 )
                 return StepResult(name=self.name, outcome="fail", error="Lyrics input selector not found")
+            await _gentle_action_pause(ctx)
         ctx.increment("suno.requests_loaded")
         ctx.increment("suno.generations_requested", self.request.count)
+        ctx.extracted["suno_request_loaded_monotonic"] = time.monotonic()
+        ctx.extracted["suno_request_advanced_mode"] = False
         await ctx.sink.write("request_loaded", request_loaded_payload(self.request))
         return StepResult(
             name=self.name,
@@ -220,6 +235,8 @@ class FillSunoRequest:
 
         ctx.increment("suno.requests_loaded")
         ctx.increment("suno.generations_requested", self.request.count)
+        ctx.extracted["suno_request_loaded_monotonic"] = time.monotonic()
+        ctx.extracted["suno_request_advanced_mode"] = True
         await ctx.sink.write("request_loaded", request_loaded_payload(self.request))
         return StepResult(
             name=self.name,
@@ -241,6 +258,35 @@ class FillSunoRequest:
 
 
 @dataclass
+class PreSubmitInspection:
+    """Record submit readiness and then stop before Create for operator inspection."""
+
+    request: SongRequest
+    name: str = "pre_submit_inspection"
+    content_marker: str | None = None
+
+    async def execute(self, ctx: VisitContext) -> StepResult:
+        """Capture submit diagnostics without clicking the create/generate button."""
+        state = await extract_create_page_state(ctx.page)
+        ctx.extracted["suno_create_state"] = state
+        diagnostics = await _pre_submit_diagnostics(ctx, state)
+        ctx.extracted["suno_pre_submit_diagnostics"] = diagnostics
+        await ctx.sink.write(
+            "generation_pre_submit",
+            generation_pre_submit_payload(self.request, state=state, diagnostics=diagnostics),
+        )
+        if state.blocked_reason is not None:
+            _increment_blocked_counters(ctx, state)
+            await ctx.sink.write("generation_blocked", generation_blocked_payload(self.request, phase=self.name, state=state))
+            return StepResult(name=self.name, outcome="fail", error=f"blocked:{state.blocked_reason}", extracted=state)
+        return StepResult(
+            name=self.name,
+            outcome="ok",
+            extracted={"submit_deferred": True, "pre_submit_diagnostics": diagnostics},
+        )
+
+
+@dataclass
 class SubmitGeneration:
     """Submit one bounded generation request."""
 
@@ -250,7 +296,33 @@ class SubmitGeneration:
 
     async def execute(self, ctx: VisitContext) -> StepResult:
         """Click the first available create/generate button."""
-        clicked = await _click_first_available(ctx.page, CREATE_BUTTON_SELECTORS.selectors)
+        state = await extract_create_page_state(ctx.page)
+        ctx.extracted["suno_create_state"] = state
+        diagnostics = await _pre_submit_diagnostics(ctx, state)
+        ctx.extracted["suno_pre_submit_diagnostics"] = diagnostics
+        await ctx.sink.write(
+            "generation_pre_submit",
+            generation_pre_submit_payload(self.request, state=state, diagnostics=diagnostics),
+        )
+        if state.blocked_reason is not None:
+            _increment_blocked_counters(ctx, state)
+            await ctx.sink.write("generation_blocked", generation_blocked_payload(self.request, phase=self.name, state=state))
+            return StepResult(name=self.name, outcome="fail", error=f"blocked:{state.blocked_reason}", extracted=state)
+        if not state.create_button_visible:
+            await ctx.sink.write(
+                "generation_failed",
+                generation_failed_payload(self.request, phase=self.name, error="Create button is not visible", state=state),
+            )
+            return StepResult(name=self.name, outcome="fail", error="Create button is not visible", extracted=state)
+        if not state.create_button_enabled:
+            await ctx.sink.write(
+                "generation_failed",
+                generation_failed_payload(self.request, phase=self.name, error="Create button is disabled", state=state),
+            )
+            return StepResult(name=self.name, outcome="fail", error="Create button is disabled", extracted=state)
+
+        await _gentle_action_pause(ctx, min_seconds=2.0, max_seconds=4.0)
+        clicked = await _click_first_available(ctx.page, CREATE_BUTTON_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         if not clicked:
             await ctx.sink.write(
                 "generation_failed",
@@ -259,8 +331,11 @@ class SubmitGeneration:
             return StepResult(name=self.name, outcome="fail", error="Create button selector not found")
         ctx.increment("suno.requests_submitted")
         attempt = ctx.counters.get("suno.requests_submitted", 1)
-        await ctx.sink.write("generation_submitted", generation_submitted_payload(self.request, attempt=attempt))
-        return StepResult(name=self.name, outcome="ok", extracted={"submitted": True})
+        await ctx.sink.write(
+            "generation_submitted",
+            generation_submitted_payload(self.request, attempt=attempt, pre_submit_diagnostics=diagnostics),
+        )
+        return StepResult(name=self.name, outcome="ok", extracted={"submitted": True, "pre_submit_diagnostics": diagnostics})
 
 
 @dataclass
@@ -566,30 +641,114 @@ def classify_song_rename_outcome(step_results: list[StepResult]) -> VisitOutcome
     return "completed"
 
 
-async def _fill_first_available(page: Any, selectors: tuple[str, ...], value: str) -> bool:
+async def _fill_first_available(page: Any, selectors: tuple[str, ...], value: str, *, rng: Any | None = None) -> bool:
     for selector in selectors:
         locator = page.locator(selector)
         target = await _first_visible_locator(locator)
         if target is None:
             continue
+        if await _type_into_locator(page, target, value, rng=rng):
+            return True
         await target.fill(value)
         return True
     return False
 
 
-async def _click_first_available(page: Any, selectors: tuple[str, ...]) -> bool:
+async def _click_first_available(page: Any, selectors: tuple[str, ...], *, rng: Any | None = None) -> bool:
     for selector in selectors:
         locator = page.locator(selector)
         target = await _first_visible_locator(locator)
         if target is None:
             continue
-        await target.click()
+        await _click_locator(page, target, rng=rng)
         return True
     return False
 
 
-async def _click_optional(page: Any, selectors: tuple[str, ...]) -> None:
-    await _click_first_available(page, selectors)
+async def _click_optional(page: Any, selectors: tuple[str, ...], *, rng: Any | None = None) -> None:
+    await _click_first_available(page, selectors, rng=rng)
+
+
+async def _pre_submit_diagnostics(ctx: VisitContext, state: CreatePageState) -> dict[str, Any]:
+    now = time.monotonic()
+    request_loaded_at = ctx.extracted.get("suno_request_loaded_monotonic")
+    ready_checked_at = ctx.extracted.get("suno_create_page_ready_monotonic")
+    diagnostics: dict[str, Any] = {
+        "url_path": _safe_url_path(getattr(ctx.page, "url", "")),
+        "create_button_visible": state.create_button_visible,
+        "create_button_enabled": state.create_button_enabled,
+        "prompt_input_visible": state.prompt_input_visible,
+        "advanced_mode": bool(ctx.extracted.get("suno_request_advanced_mode", False)),
+        "blocked_reason": state.blocked_reason,
+        "manual_verification_visible": bool(state.diagnostics.get("manual_verification_visible", False)),
+    }
+    if isinstance(request_loaded_at, (int, float)):
+        diagnostics["seconds_since_request_loaded"] = round(max(0.0, now - float(request_loaded_at)), 3)
+    if isinstance(ready_checked_at, (int, float)):
+        diagnostics["seconds_since_ready_check"] = round(max(0.0, now - float(ready_checked_at)), 3)
+    return diagnostics
+
+
+def _safe_url_path(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        return url.split("?", 1)[0]
+    return parsed.path or "/"
+
+
+async def _type_into_locator(page: Any, target: Any, value: str, *, rng: Any | None = None) -> bool:
+    keyboard = getattr(page, "keyboard", None)
+    keyboard_type = getattr(keyboard, "type", None)
+    if not callable(keyboard_type):
+        return False
+    try:
+        await _click_locator(page, target, rng=rng)
+        await target.fill("")
+        delay = _typing_delay_ms(rng)
+        await keyboard_type(value, delay=delay)
+        return True
+    except Exception:
+        return False
+
+
+async def _click_locator(page: Any, target: Any, *, rng: Any | None = None) -> None:
+    box = None
+    try:
+        box = await target.bounding_box()
+    except Exception:
+        box = None
+
+    mouse = getattr(page, "mouse", None)
+    mouse_move = getattr(mouse, "move", None)
+    mouse_click = getattr(mouse, "click", None)
+    if isinstance(box, dict) and callable(mouse_move) and callable(mouse_click):
+        width = float(box.get("width", 0.0))
+        height = float(box.get("height", 0.0))
+        if width > 0 and height > 0:
+            sampler = rng if rng is not None else None
+            uniform = getattr(sampler, "uniform", None)
+            randint = getattr(sampler, "randint", None)
+            x_ratio = uniform(0.35, 0.65) if callable(uniform) else 0.5
+            y_ratio = uniform(0.35, 0.65) if callable(uniform) else 0.5
+            steps = randint(4, 10) if callable(randint) else 6
+            x = float(box.get("x", 0.0)) + width * x_ratio
+            y = float(box.get("y", 0.0)) + height * y_ratio
+            try:
+                await mouse_move(x, y, steps=steps)
+                await mouse_click(x, y)
+                return
+            except Exception:
+                pass
+    await target.click()
+
+
+def _typing_delay_ms(rng: Any | None) -> int:
+    randint = getattr(rng, "randint", None)
+    if callable(randint):
+        return int(randint(15, 45))
+    return 30
 
 
 async def _resolve_song_download_targets(ctx: VisitContext, source_url: str) -> list[GeneratedSongLink] | StepResult:
@@ -983,7 +1142,7 @@ async def _fill_text_fields(ctx: VisitContext, fields: tuple[tuple[str | None, t
     for value, selectors, error in fields:
         if value is None:
             continue
-        if not await _fill_first_available(ctx.page, selectors, value):
+        if not await _fill_first_available(ctx.page, selectors, value, rng=getattr(ctx, "rng", None)):
             return error
         await _gentle_action_pause(ctx)
     return None
@@ -991,19 +1150,19 @@ async def _fill_text_fields(ctx: VisitContext, fields: tuple[tuple[str | None, t
 
 async def _apply_advanced_button_fields(ctx: VisitContext, request: SongRequest) -> None:
     if request.instrumental:
-        await _click_optional(ctx.page, INSTRUMENTAL_SELECTORS.selectors)
+        await _click_optional(ctx.page, INSTRUMENTAL_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         await _gentle_action_pause(ctx)
     if request.vocal_gender == "male":
-        await _click_optional(ctx.page, MALE_VOCAL_SELECTORS.selectors)
+        await _click_optional(ctx.page, MALE_VOCAL_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         await _gentle_action_pause(ctx)
     elif request.vocal_gender == "female":
-        await _click_optional(ctx.page, FEMALE_VOCAL_SELECTORS.selectors)
+        await _click_optional(ctx.page, FEMALE_VOCAL_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         await _gentle_action_pause(ctx)
     if request.style_mode == "manual":
-        await _click_optional(ctx.page, MANUAL_STYLE_MODE_SELECTORS.selectors)
+        await _click_optional(ctx.page, MANUAL_STYLE_MODE_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         await _gentle_action_pause(ctx)
     elif request.style_mode == "auto":
-        await _click_optional(ctx.page, AUTO_STYLE_MODE_SELECTORS.selectors)
+        await _click_optional(ctx.page, AUTO_STYLE_MODE_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
         await _gentle_action_pause(ctx)
 
 
@@ -1015,7 +1174,7 @@ async def _open_more_options_for_advanced_levers(ctx: VisitContext, request: Son
         return
     if expanded is None and await _requested_more_options_controls_visible(ctx.page, request):
         return
-    await _click_optional(ctx.page, MORE_OPTIONS_SELECTORS.selectors)
+    await _click_optional(ctx.page, MORE_OPTIONS_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
     await _gentle_action_pause(ctx)
 
 
@@ -1234,6 +1393,8 @@ def _increment_blocked_counters(ctx: VisitContext, state: CreatePageState) -> No
     ctx.increment("suno.blocked_states_detected")
     if state.blocked_reason == "policy_rejected":
         ctx.increment("suno.policy_blocks_detected")
+    elif state.blocked_reason == "manual_verification_required":
+        ctx.increment("suno.manual_verification_blocks_detected")
 
 
 async def _page_viewport_width(page: Any) -> float | None:

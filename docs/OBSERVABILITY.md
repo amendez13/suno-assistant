@@ -174,7 +174,8 @@ tail -n 20 data/sessions/suno/<session-id>/evidence.jsonl
 Current event types:
 
 - `request_loaded`: request id, prompt, prompt hash, title/style flags, count, mode flags, and tags.
-- `generation_submitted`: request id, submit attempt, timestamp, and field summary.
+- `generation_pre_submit`: request id, field summary, compact page state, button readiness, challenge visibility, URL path, and timing diagnostics recorded before any Create click.
+- `generation_submitted`: request id, submit attempt, timestamp, field summary, and pre-submit diagnostics.
 - `generation_completed`: request id, visible result count, titles, IDs, and URLs when present.
 - `generation_blocked`: request id, phase, block reason, safe visible message, and compact page state.
 - `generation_failed`: request id, phase, error summary, and compact page state when available.
@@ -186,6 +187,7 @@ Manifest counters use Suno-specific names:
 - `suno.generations_requested`
 - `suno.generations_detected`
 - `suno.blocked_states_detected`
+- `suno.manual_verification_blocks_detected`
 - `suno.policy_blocks_detected`
 
 Evidence does not store cookies/storage state, but it can include
@@ -202,9 +204,11 @@ cat "$SESSION_DIR/manifest.json"
 tail -n 50 "$SESSION_DIR/evidence.jsonl"
 ```
 
-Confirm that request-aware runs have `request_loaded`,
-`generation_submitted`, and one terminal generation event. Then decide whether
-to keep or purge the local artifacts. Use [MANUAL_SMOKE.md](MANUAL_SMOKE.md) for
+Confirm that request-aware submit runs have `request_loaded`,
+`generation_pre_submit`, `generation_submitted`, and one terminal generation
+event. Confirm-submit inspection runs should have `request_loaded` and
+`generation_pre_submit` but no `generation_submitted`. Then decide whether to
+keep or purge the local artifacts. Use [MANUAL_SMOKE.md](MANUAL_SMOKE.md) for
 the full live smoke checklist and cleanup commands.
 
 ## Verifying Loki Ingestion

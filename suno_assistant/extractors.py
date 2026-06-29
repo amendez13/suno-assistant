@@ -6,14 +6,34 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, Literal
 
-BlockedReason = Literal["auth_required", "quota_unavailable", "policy_rejected"]
+BlockedReason = Literal["auth_required", "manual_verification_required", "quota_unavailable", "policy_rejected"]
 
 _PROMPT_MARKERS = ("prompt", "describe", "song")
 _STYLE_MARKERS = ("style", "genre", "vibe")
 _LYRICS_MARKERS = ("lyrics", "words")
 _CREATE_BUTTON_MARKERS = ("create", "generate")
 _AUTH_TEXT_MARKERS = ("sign in", "log in", "login")
-_QUOTA_TEXT_MARKERS = ("credits", "quota", "subscription", "upgrade")
+_CHALLENGE_TEXT_MARKERS = (
+    "captcha",
+    "verify you are human",
+    "verification",
+    "manual verification",
+    "security check",
+    "challenge",
+    "turnstile",
+    "cf-turnstile",
+    "hcaptcha",
+    "recaptcha",
+    "cloudflare",
+)
+_QUOTA_TEXT_MARKERS = (
+    "not enough credits",
+    "not have enough credits",
+    "out of credits",
+    "quota",
+    "subscription required",
+    "upgrade to continue",
+)
 _POLICY_TEXT_MARKERS = ("policy", "moderation", "rejected", "not allowed")
 _PROGRESS_TEXT_MARKERS = ("generating", "creating your song", "in progress")
 
@@ -79,6 +99,9 @@ class _ElementCollector(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._stack.append({"tag": tag, "attrs": {key: value or "" for key, value in attrs}, "text": []})
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.elements.append(_Element(tag=tag, attrs={key: value or "" for key, value in attrs}, text=""))
+
     def handle_data(self, data: str) -> None:
         if self._stack:
             self._stack[-1]["text"].append(data)
@@ -105,12 +128,21 @@ def classify_create_page_html(html: str) -> CreatePageState:
     """Classify a Suno create-page HTML snapshot."""
     elements = _parse_elements(html)
     document_text = " ".join(element.text for element in elements).casefold()
-    blocked_reason = _blocked_reason(document_text)
+    document_haystack = " ".join(element.haystack for element in elements).casefold()
     results = _extract_results(elements)
     prompt_visible = _has_input(elements, _PROMPT_MARKERS)
     style_visible = _has_input(elements, _STYLE_MARKERS)
     lyrics_visible = _has_input(elements, _LYRICS_MARKERS)
     create_button = _find_create_button(elements)
+    create_button_visible = create_button is not None
+    create_button_enabled = bool(create_button is not None and not _is_disabled(create_button))
+    blocked_reason = _blocked_reason(
+        document_text=document_text,
+        document_haystack=document_haystack,
+        prompt_visible=prompt_visible,
+        create_button_visible=create_button_visible,
+        create_button_enabled=create_button_enabled,
+    )
     authenticated = blocked_reason != "auth_required" and bool(
         prompt_visible or style_visible or lyrics_visible or create_button is not None
     )
@@ -121,8 +153,8 @@ def classify_create_page_html(html: str) -> CreatePageState:
         style_input_visible=style_visible,
         lyrics_input_visible=lyrics_visible,
         custom_mode_available=_has_custom_mode(elements),
-        create_button_visible=create_button is not None,
-        create_button_enabled=bool(create_button is not None and not _is_disabled(create_button)),
+        create_button_visible=create_button_visible,
+        create_button_enabled=create_button_enabled,
         generation_in_progress=any(marker in document_text for marker in _PROGRESS_TEXT_MARKERS),
         blocked_reason=blocked_reason,
         blocked_message=_blocked_message(document_text, blocked_reason),
@@ -131,7 +163,9 @@ def classify_create_page_html(html: str) -> CreatePageState:
             "elements_seen": len(elements),
             "results_seen": len(results),
             "prompt_input_visible": prompt_visible,
-            "create_button_visible": create_button is not None,
+            "create_button_visible": create_button_visible,
+            "create_button_enabled": create_button_enabled,
+            "manual_verification_visible": _has_challenge_marker(document_haystack),
         },
     )
 
@@ -176,14 +210,31 @@ def _is_disabled(element: _Element) -> bool:
     return disabled_value is not None or aria_disabled == "true"
 
 
-def _blocked_reason(document_text: str) -> BlockedReason | None:
+def _blocked_reason(
+    *,
+    document_text: str,
+    document_haystack: str,
+    prompt_visible: bool,
+    create_button_visible: bool,
+    create_button_enabled: bool,
+) -> BlockedReason | None:
+    if _has_challenge_marker(document_haystack):
+        return "manual_verification_required"
     if any(marker in document_text for marker in _AUTH_TEXT_MARKERS):
         return "auth_required"
-    if any(marker in document_text for marker in _QUOTA_TEXT_MARKERS):
+    if _has_quota_marker(document_text) and (not prompt_visible or not create_button_visible or not create_button_enabled):
         return "quota_unavailable"
     if any(marker in document_text for marker in _POLICY_TEXT_MARKERS):
         return "policy_rejected"
     return None
+
+
+def _has_challenge_marker(document_haystack: str) -> bool:
+    return any(marker in document_haystack for marker in _CHALLENGE_TEXT_MARKERS)
+
+
+def _has_quota_marker(document_text: str) -> bool:
+    return any(marker in document_text for marker in _QUOTA_TEXT_MARKERS)
 
 
 def _blocked_message(document_text: str, reason: BlockedReason | None) -> str | None:
@@ -191,6 +242,7 @@ def _blocked_message(document_text: str, reason: BlockedReason | None) -> str | 
         return None
     return {
         "auth_required": "Sign-in or login required.",
+        "manual_verification_required": "Manual verification or CAPTCHA challenge detected.",
         "quota_unavailable": "Quota, credits, subscription, or upgrade block detected.",
         "policy_rejected": "Policy, moderation, or prompt rejection block detected.",
     }[reason]
