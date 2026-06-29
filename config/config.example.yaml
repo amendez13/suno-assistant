@@ -6,8 +6,10 @@
 
 visitor:
   headless: true
-  locale: en-US
-  timezone_id: UTC
+  # Keep browser locale/timezone aligned with the real operator environment.
+  # Change these when running from a different locale/timezone.
+  locale: es-ES
+  timezone_id: Europe/Madrid
   page_timeout_seconds: 30
   pacing:
     profile: production

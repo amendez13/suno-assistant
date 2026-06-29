@@ -112,6 +112,8 @@ The main configuration file. See `config/config.example.yaml` for all available 
 ```yaml
 visitor:
   headless: true
+  locale: es-ES
+  timezone_id: Europe/Madrid
 
 sites:
   suno:
@@ -126,6 +128,11 @@ sites:
 workflow runs. If Suno redirects that URL to login, auth, verification, or a
 third-party provider, the run returns an auth-required blocked result before
 building a generation plan.
+
+Set `visitor.locale` and `visitor.timezone_id` to the real operator
+environment for the machine running the headed browser. The example values above
+match this Spain/Madrid operator environment; choose different values
+deliberately for another operator.
 
 ### Suno Login Bootstrap
 

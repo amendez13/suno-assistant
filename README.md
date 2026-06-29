@@ -101,14 +101,27 @@ python -m suno_assistant.main \
   --request examples/advanced-song-request.yaml
 ```
 
+Fill a request, record pre-submit diagnostics, and stop before clicking Create:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --confirm-submit \
+  --request examples/advanced-song-request.yaml
+```
+
 The current request-aware path validates the song request before browser startup
 and runs the bounded generation plan after the saved Suno session is verified.
 The MVP generation path fills supported fields, submits once, waits within a
 bounded timeout for visible results or known blocked states, and records a
 Suno-specific evidence events in the active GSV evidence sink. `--fill-only`
-stops after populating supported fields and never clicks create/generate. The
-create workflow itself does not download audio files or bypass Suno quotas,
-moderation, CAPTCHA, MFA, or other platform controls.
+stops after populating supported fields and never clicks create/generate.
+`--confirm-submit` records a safe create-button and page-state diagnostic event
+after filling, then stops before Create so the operator can inspect the headed
+browser. The create workflow itself does not download audio files or bypass
+Suno quotas, moderation, CAPTCHA, MFA, or other platform controls.
 
 Collect visible generated-song titles and links from the authenticated Suno
 library without downloading audio:
@@ -177,7 +190,7 @@ the active session bundle:
 data/sessions/suno/<session-id>/evidence.jsonl
 ```
 
-Events include `request_loaded`, `generation_submitted`,
+Events include `request_loaded`, `generation_pre_submit`, `generation_submitted`,
 `generation_completed`, `generation_blocked`, `generation_failed`,
 `song_links_collected`, `song_downloads_completed`, and
 `song_downloads_failed`. Evidence contains the explicit prompt, visible result
@@ -210,6 +223,10 @@ sites:
 `auth_marker_url` is the authenticated create-page marker used by the GSV
 session layer. If Suno redirects that URL to a sign-in or verification page, run
 the headed login bootstrap again.
+
+Keep `visitor.locale` and `visitor.timezone_id` aligned with the real operator
+environment. The example config uses `es-ES` and `Europe/Madrid` for this
+machine; change those values deliberately for another operator environment.
 
 ## Song Request Files
 

@@ -38,6 +38,7 @@ from suno_assistant.steps import (
     CollectGeneratedSongLinks,
     DownloadGeneratedSongs,
     FillSunoRequest,
+    PreSubmitInspection,
     RenameGeneratedSongs,
     SelectAdvancedMode,
     SubmitGeneration,
@@ -221,6 +222,7 @@ class FakePage:
         self.viewport_size = viewport_size
         self.evaluate_values = evaluate_values or []
         self.evaluate_error = evaluate_error
+        self.url = "https://suno.com/create"
         self.content_calls = 0
         self.load_state_calls: list[tuple[str, int]] = []
         self.evaluate_calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -641,14 +643,15 @@ def test_fill_suno_request_requires_prompt_selector() -> None:
 
 def test_submit_generation_requires_create_button_selector() -> None:
     """Submitting should fail clearly when no create selector matches."""
-    ctx = make_ctx(FakePage(["create_ready.html"], selectors=set()))
+    ctx = make_ctx(FakePage(["create_no_button.html"], selectors=set()))
     request = SongRequest.from_prompt("An original song about a missing submit selector.")
 
     result = asyncio.run(SubmitGeneration(request).execute(ctx))
 
     assert result.outcome == "fail"
-    assert result.error == "Create button selector not found"
-    assert ctx.sink.events[0][0] == "generation_failed"
+    assert result.error == "Create button is not visible"
+    assert ctx.sink.events[0][0] == "generation_pre_submit"
+    assert ctx.sink.events[1][0] == "generation_failed"
 
 
 def test_submit_generation_clicks_create_button_and_records_event() -> None:
@@ -661,9 +664,41 @@ def test_submit_generation_clicks_create_button_and_records_event() -> None:
     assert result.outcome == "ok"
     assert ctx.counters == {"suno.requests_submitted": 1}
     assert ctx.page.clicks == [CREATE_BUTTON_SELECTORS.selectors[0]]
-    assert ctx.sink.events[0][0] == "generation_submitted"
-    assert ctx.sink.events[0][1]["attempt"] == 1
-    assert ctx.sink.events[0][1]["request_id"]
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_submitted"]
+    assert ctx.sink.events[1][1]["attempt"] == 1
+    assert ctx.sink.events[1][1]["request_id"]
+    assert ctx.sink.events[1][1]["pre_submit_diagnostics"]["url_path"] == "/create"
+
+
+def test_pre_submit_inspection_records_diagnostics_without_clicking_create() -> None:
+    """Confirm-submit mode should stop before the high-value create action."""
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about inspecting before submit.")
+
+    result = asyncio.run(PreSubmitInspection(request).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert result.extracted["submit_deferred"] is True
+    assert ctx.page.clicks == []
+    assert ctx.sink.events[0][0] == "generation_pre_submit"
+    assert ctx.sink.events[0][1]["diagnostics"]["create_button_enabled"] is True
+
+
+def test_submit_generation_blocks_manual_verification_before_clicking() -> None:
+    """Manual verification should be reported as blocked and never clicked around."""
+    ctx = make_ctx(FakePage(["manual_verification.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    request = SongRequest.from_prompt("An original song about verification.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "blocked:manual_verification_required"
+    assert ctx.page.clicks == []
+    assert ctx.counters == {
+        "suno.blocked_states_detected": 1,
+        "suno.manual_verification_blocks_detected": 1,
+    }
+    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_blocked"]
 
 
 def test_first_locator_falls_back_when_locator_has_no_first_property() -> None:

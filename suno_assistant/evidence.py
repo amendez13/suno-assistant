@@ -72,28 +72,58 @@ def request_loaded_payload(request: SongRequest) -> dict[str, Any]:
     }
 
 
-def generation_submitted_payload(request: SongRequest, *, attempt: int) -> dict[str, Any]:
-    """Build the generation_submitted evidence payload."""
+def generation_pre_submit_payload(
+    request: SongRequest,
+    *,
+    state: CreatePageState,
+    diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the generation_pre_submit evidence payload."""
     identity = build_request_identity(request)
     return {
         "request_id": identity.request_id,
+        "recorded_at": _now_iso(),
+        "field_summary": field_summary_payload(request),
+        "page_state": page_state_payload(state),
+        "diagnostics": dict(diagnostics),
+    }
+
+
+def generation_submitted_payload(
+    request: SongRequest,
+    *,
+    attempt: int,
+    pre_submit_diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the generation_submitted evidence payload."""
+    identity = build_request_identity(request)
+    payload = {
+        "request_id": identity.request_id,
         "attempt": attempt,
         "submitted_at": _now_iso(),
-        "field_summary": {
-            "prompt_length": len(request.prompt),
-            "has_title": request.title is not None,
-            "has_style": request.style is not None,
-            "has_lyrics": request.lyrics is not None,
-            "instrumental": request.instrumental,
-            "custom_mode": request.custom_mode,
-            "advanced_mode": request.advanced_mode,
-            "has_exclude_styles": request.exclude_styles is not None,
-            "vocal_gender": request.vocal_gender,
-            "style_mode": request.style_mode,
-            "weirdness": request.weirdness,
-            "style_influence": request.style_influence,
-            "count": request.count,
-        },
+        "field_summary": field_summary_payload(request),
+    }
+    if pre_submit_diagnostics is not None:
+        payload["pre_submit_diagnostics"] = dict(pre_submit_diagnostics)
+    return payload
+
+
+def field_summary_payload(request: SongRequest) -> dict[str, Any]:
+    """Build a compact request-shape payload without full lyrics or media."""
+    return {
+        "prompt_length": len(request.prompt),
+        "has_title": request.title is not None,
+        "has_style": request.style is not None,
+        "has_lyrics": request.lyrics is not None,
+        "instrumental": request.instrumental,
+        "custom_mode": request.custom_mode,
+        "advanced_mode": request.advanced_mode,
+        "has_exclude_styles": request.exclude_styles is not None,
+        "vocal_gender": request.vocal_gender,
+        "style_mode": request.style_mode,
+        "weirdness": request.weirdness,
+        "style_influence": request.style_influence,
+        "count": request.count,
     }
 
 

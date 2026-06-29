@@ -141,6 +141,28 @@ Expected fill-only behavior:
 - If quota blocks submission but the prompt input is visible, the run can still
   fill the prompt for operator inspection.
 
+To capture submit readiness diagnostics without clicking Create, use
+confirm-submit mode:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --confirm-submit \
+  --request /tmp/suno-smoke-request.yaml
+```
+
+Expected confirm-submit behavior:
+
+- The browser opens the authenticated create page.
+- Supported request fields are filled.
+- A `generation_pre_submit` evidence event records safe page state, button
+  readiness, challenge visibility, and timing since request fill.
+- The run never clicks create/generate.
+- If a CAPTCHA or manual verification challenge is visible, it is recorded as
+  `manual_verification_required` and the run stops.
+
 To inspect Advanced mode, use the advanced example request:
 
 ```bash
@@ -187,13 +209,15 @@ tail -n 50 "$SESSION_DIR/evidence.jsonl"
 For a successful request-aware smoke run, expect:
 
 - `request_loaded`
+- `generation_pre_submit`
 - `generation_submitted`
 - one terminal event such as `generation_completed`, `generation_blocked`, or
   `generation_failed`
 
-Blocked quota, auth, policy, disabled-control, or prompt-rejection outcomes are
-valid smoke results when they are explicit, bounded, and recorded in evidence.
-Do not add loops or bypass behavior to turn those states into success.
+Blocked quota, auth, manual verification, policy, disabled-control, or
+prompt-rejection outcomes are valid smoke results when they are explicit,
+bounded, and recorded in evidence. Do not add loops or bypass behavior to turn
+those states into success.
 
 ## 6. Check Git Safety
 

@@ -3,6 +3,7 @@
 from suno_assistant.evidence import (
     build_request_identity,
     generation_completed_payload,
+    generation_pre_submit_payload,
     generation_submitted_payload,
     request_loaded_payload,
     song_downloads_completed_payload,
@@ -62,6 +63,32 @@ def test_generation_submitted_payload_summarizes_fields_without_media() -> None:
     assert payload["field_summary"]["has_style"] is True
     assert payload["field_summary"]["has_lyrics"] is True
     assert payload["field_summary"]["custom_mode"] is True
+
+
+def test_generation_pre_submit_payload_records_safe_diagnostics() -> None:
+    """Pre-submit evidence should capture readiness without storing full lyrics."""
+    request = SongRequest.from_mapping(
+        {
+            "prompt": "An original song about submit diagnostics.",
+            "lyrics": "A private verse should not be copied into diagnostics",
+            "advanced_mode": True,
+        }
+    )
+    state = CreatePageState(
+        authenticated=True, prompt_input_visible=True, create_button_visible=True, create_button_enabled=True
+    )
+
+    payload = generation_pre_submit_payload(
+        request,
+        state=state,
+        diagnostics={"seconds_since_request_loaded": 3.2, "url_path": "/create"},
+    )
+
+    assert payload["request_id"] == build_request_identity(request).request_id
+    assert payload["field_summary"]["has_lyrics"] is True
+    assert "lyrics" not in payload["field_summary"]
+    assert payload["diagnostics"]["url_path"] == "/create"
+    assert payload["page_state"]["create_button_enabled"] is True
 
 
 def test_generation_completed_payload_keeps_visible_metadata_only() -> None:
