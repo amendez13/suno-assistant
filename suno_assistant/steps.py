@@ -747,8 +747,8 @@ async def _click_locator(page: Any, target: Any, *, rng: Any | None = None) -> N
 def _typing_delay_ms(rng: Any | None) -> int:
     randint = getattr(rng, "randint", None)
     if callable(randint):
-        return int(randint(45, 130))
-    return 75
+        return int(randint(15, 45))
+    return 30
 
 
 async def _resolve_song_download_targets(ctx: VisitContext, source_url: str) -> list[GeneratedSongLink] | StepResult:
