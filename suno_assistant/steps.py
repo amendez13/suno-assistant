@@ -37,7 +37,6 @@ from .selectors import (
     AUTH_REQUIRED_SELECTORS,
     AUTO_STYLE_MODE_SELECTORS,
     CREATE_BUTTON_SELECTORS,
-    CUSTOM_MODE_SELECTORS,
     EXCLUDE_STYLES_INPUT_SELECTORS,
     FEMALE_VOCAL_SELECTORS,
     INSTRUMENTAL_SELECTORS,
@@ -179,17 +178,10 @@ class FillSunoRequest:
         if self.request.uses_advanced_controls:
             return await self._execute_advanced(ctx)
 
-        if self.request.custom_mode:
-            await _click_optional(
-                ctx.page,
-                CUSTOM_MODE_SELECTORS.selectors,
-                rng=getattr(ctx, "rng", None),
-                ctx=ctx,
-                selector_group=CUSTOM_MODE_SELECTORS.name,
-                phase=self.name,
-                source="fill_suno_request.custom_mode",
-            )
-            await _gentle_action_pause(ctx)
+        # Simple mode exposes only the description/prompt box. Style, Lyrics, and
+        # custom_mode all set uses_advanced_controls (the Suno UI exposes those
+        # controls only in the Advanced layout), so a request reaching this branch
+        # has none of them and is filled from the prompt alone.
         if not await _fill_first_available(
             ctx.page,
             PROMPT_INPUT_SELECTORS.selectors,
@@ -205,43 +197,6 @@ class FillSunoRequest:
                 generation_failed_payload(self.request, phase=self.name, error="Prompt input selector not found"),
             )
             return StepResult(name=self.name, outcome="fail", error="Prompt input selector not found")
-        await _gentle_action_pause(ctx)
-        if self.request.style is not None:
-            filled_style = await _fill_first_available(
-                ctx.page,
-                STYLE_INPUT_SELECTORS.selectors,
-                self.request.style,
-                rng=getattr(ctx, "rng", None),
-                ctx=ctx,
-                selector_group=STYLE_INPUT_SELECTORS.name,
-                phase=self.name,
-                source="fill_suno_request.style_input",
-            )
-            if not filled_style:
-                await ctx.sink.write(
-                    "generation_failed",
-                    generation_failed_payload(self.request, phase=self.name, error="Style input selector not found"),
-                )
-                return StepResult(name=self.name, outcome="fail", error="Style input selector not found")
-            await _gentle_action_pause(ctx)
-        if self.request.lyrics is not None:
-            filled_lyrics = await _fill_first_available(
-                ctx.page,
-                LYRICS_INPUT_SELECTORS.selectors,
-                self.request.lyrics,
-                rng=getattr(ctx, "rng", None),
-                ctx=ctx,
-                selector_group=LYRICS_INPUT_SELECTORS.name,
-                phase=self.name,
-                source="fill_suno_request.lyrics_input",
-            )
-            if not filled_lyrics:
-                await ctx.sink.write(
-                    "generation_failed",
-                    generation_failed_payload(self.request, phase=self.name, error="Lyrics input selector not found"),
-                )
-                return StepResult(name=self.name, outcome="fail", error="Lyrics input selector not found")
-            await _gentle_action_pause(ctx)
         ctx.increment("suno.requests_loaded")
         ctx.increment("suno.generations_requested", self.request.count)
         ctx.extracted["suno_request_loaded_monotonic"] = time.monotonic()
@@ -252,9 +207,9 @@ class FillSunoRequest:
             outcome="ok",
             extracted={
                 "prompt_length": len(self.request.prompt),
-                "has_style": self.request.style is not None,
-                "has_lyrics": self.request.lyrics is not None,
-                "custom_mode": self.request.custom_mode,
+                "has_style": False,
+                "has_lyrics": False,
+                "custom_mode": False,
                 "advanced_mode": False,
                 "count": self.request.count,
             },
