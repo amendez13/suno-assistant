@@ -108,6 +108,101 @@ def generation_submitted_payload(
     return payload
 
 
+def create_click_attempted_payload(
+    request: SongRequest,
+    *,
+    phase: str,
+    source: str,
+    click: dict[str, Any] | None,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build evidence for a Create click that the automation attempted."""
+    identity = build_request_identity(request)
+    return {
+        "request_id": identity.request_id,
+        "phase": phase,
+        "source": source,
+        "click": dict(click or {}),
+        "diagnostics": dict(diagnostics or {}),
+        "recorded_at": _now_iso(),
+    }
+
+
+def create_click_skipped_payload(
+    request: SongRequest,
+    *,
+    phase: str,
+    reason: str,
+    state: CreatePageState | None = None,
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build evidence for a Create click that was intentionally skipped."""
+    identity = build_request_identity(request)
+    return {
+        "request_id": identity.request_id,
+        "phase": phase,
+        "reason": reason,
+        "page_state": page_state_payload(state) if state is not None else None,
+        "diagnostics": dict(diagnostics or {}),
+        "recorded_at": _now_iso(),
+    }
+
+
+def visit_step_started_payload(*, step_name: str, page: dict[str, Any]) -> dict[str, Any]:
+    """Build evidence for the start of a visit-plan step."""
+    return {
+        "step": step_name,
+        "page": dict(page),
+        "recorded_at": _now_iso(),
+    }
+
+
+def visit_step_finished_payload(
+    *,
+    step_name: str,
+    outcome: str,
+    error: str | None,
+    duration_seconds: float,
+    page: dict[str, Any],
+) -> dict[str, Any]:
+    """Build evidence for the end of a visit-plan step."""
+    return {
+        "step": step_name,
+        "outcome": outcome,
+        "error": error,
+        "duration_seconds": round(max(0.0, duration_seconds), 3),
+        "page": dict(page),
+        "recorded_at": _now_iso(),
+    }
+
+
+def ui_click_payload(
+    *,
+    phase: str,
+    source: str,
+    selector_group: str,
+    selector: str | None,
+    selector_index: int | None,
+    outcome: str,
+    click: dict[str, Any] | None,
+    page: dict[str, Any],
+    error: str | None = None,
+) -> dict[str, Any]:
+    """Build safe evidence for a semantic UI click target."""
+    return {
+        "phase": phase,
+        "source": source,
+        "selector_group": selector_group,
+        "selector": selector,
+        "selector_index": selector_index,
+        "outcome": outcome,
+        "error": error,
+        "click": dict(click or {}),
+        "page": dict(page),
+        "recorded_at": _now_iso(),
+    }
+
+
 def field_summary_payload(request: SongRequest) -> dict[str, Any]:
     """Build a compact request-shape payload without full lyrics or media."""
     return {
