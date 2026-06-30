@@ -124,6 +124,72 @@ class FakeSession:
         return True
 
 
+class FakePersistentPage:
+    """Fake page used by persistent-profile diagnostic tests."""
+
+    def __init__(self) -> None:
+        self.url = "https://suno.com/create?draft=secret"
+        self.gotos: list[tuple[str, str]] = []
+        self.closed = False
+
+    async def goto(self, url: str, *, wait_until: str) -> None:
+        self.gotos.append((url, wait_until))
+        self.url = url
+
+    def is_closed(self) -> bool:
+        return self.closed
+
+
+class FakePersistentContext:
+    """Fake persistent browser context used by diagnostic tests."""
+
+    def __init__(self) -> None:
+        self.pages: list[FakePersistentPage] = []
+        self.page = FakePersistentPage()
+        self.init_scripts: list[str] = []
+        self.default_timeout: int | None = None
+        self.closed = False
+
+    async def add_init_script(self, script: str) -> None:
+        self.init_scripts.append(script)
+
+    def set_default_timeout(self, timeout: int) -> None:
+        self.default_timeout = timeout
+
+    async def new_page(self) -> FakePersistentPage:
+        self.pages.append(self.page)
+        return self.page
+
+    async def close(self) -> None:
+        self.closed = True
+        self.page.closed = True
+
+
+class FakePersistentChromium:
+    """Fake Chromium launcher for persistent-profile diagnostic tests."""
+
+    def __init__(self, context: FakePersistentContext) -> None:
+        self.context = context
+        self.kwargs: dict[str, object] = {}
+
+    async def launch_persistent_context(self, **kwargs) -> FakePersistentContext:  # type: ignore[no-untyped-def]
+        self.kwargs = kwargs
+        return self.context
+
+
+class FakeAsyncPlaywright:
+    """Async context manager shaped like playwright.async_api.async_playwright()."""
+
+    def __init__(self, context: FakePersistentContext) -> None:
+        self.chromium = FakePersistentChromium(context)
+
+    async def __aenter__(self) -> "FakeAsyncPlaywright":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        del exc_type, exc, tb
+
+
 class TestProjectSummary:
     """Tests for the project identity helpers."""
 
@@ -186,6 +252,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
@@ -194,6 +261,7 @@ class TestProjectSummary:
             assert song_request is None
             assert fill_only is False
             assert confirm_submit is False
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -224,6 +292,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
@@ -232,6 +301,7 @@ class TestProjectSummary:
             assert song_request is None
             assert fill_only is False
             assert confirm_submit is False
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -262,6 +332,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is False
@@ -271,6 +342,7 @@ class TestProjectSummary:
             assert song_request.count == 1
             assert fill_only is False
             assert confirm_submit is False
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -311,6 +383,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             del headed, keep_open
             assert config_path == Path("config/config.yaml")
@@ -321,6 +394,7 @@ class TestProjectSummary:
             assert song_request.tags == ["smoke"]
             assert fill_only is False
             assert confirm_submit is False
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -369,6 +443,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
@@ -377,6 +452,7 @@ class TestProjectSummary:
             assert song_request is None
             assert fill_only is False
             assert confirm_submit is False
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -407,6 +483,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
@@ -415,6 +492,7 @@ class TestProjectSummary:
             assert song_request.prompt == "Make an original acoustic song about filling the create box."
             assert fill_only is True
             assert confirm_submit is False
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -453,6 +531,7 @@ class TestProjectSummary:
             song_request=None,
             fill_only: bool = False,
             confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
         ) -> VisitResult:
             assert config_path == Path("config/config.yaml")
             assert headed is True
@@ -461,6 +540,7 @@ class TestProjectSummary:
             assert song_request.prompt == "Make an original acoustic song about checking before submit."
             assert fill_only is False
             assert confirm_submit is True
+            assert skip_recording_context_rotation is False
             return VisitResult(
                 outcome="completed",
                 error=None,
@@ -483,6 +563,105 @@ class TestProjectSummary:
 
         assert exit_code == 0
         assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_passes_skip_recording_context_rotation_flag(
+        self, monkeypatch, capsys
+    ) -> None:  # type: ignore[no-untyped-def]
+        """The CLI should pass the context-rotation diagnostic flag to create runs."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_create_visit(
+            config_path: Path,
+            *,
+            headed: bool = False,
+            keep_open: bool = False,
+            login: bool = False,
+            song_request=None,
+            fill_only: bool = False,
+            confirm_submit: bool = False,
+            skip_recording_context_rotation: bool = False,
+        ) -> VisitResult:
+            del headed, keep_open, login, fill_only, confirm_submit
+            assert config_path == Path("config/config.yaml")
+            assert song_request.prompt == "Make an original song about a stable context."
+            assert skip_recording_context_rotation is True
+            return VisitResult(
+                outcome="completed",
+                error=None,
+                counters={},
+                extracted={},
+                step_results=[StepResult(name="navigate_create_page", outcome="ok")],
+            )
+
+        monkeypatch.setattr(main_module, "run_create_visit", fake_run_create_visit)
+
+        exit_code = main_module.main(
+            [
+                "--skip-recording-context-rotation",
+                "--prompt",
+                "Make an original song about a stable context.",
+            ]
+        )
+
+        assert exit_code == 0
+        assert capsys.readouterr().out == "summary from test\nRun completed: suno\n"
+
+    def test_main_runs_persistent_profile_check(
+        self, monkeypatch, capsys, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Persistent-profile check mode should not run create submission paths."""
+        profile_dir = tmp_path / "profile"
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        async def fake_run_persistent_profile_auth_check(
+            config_path: Path,
+            *,
+            profile_dir: Path,
+            headed: bool = False,
+            keep_open: bool = False,
+        ) -> VisitResult:
+            assert config_path == Path("config/config.yaml")
+            assert profile_dir == profile_dir_arg
+            assert headed is True
+            assert keep_open is True
+            return VisitResult(
+                outcome="blocked",
+                error="blocked:manual_verification_required",
+                counters={"persistent_profile_auth_check": 1},
+                extracted={"profile_auth_diagnostics": {"blocked_reason": "manual_verification_required"}},
+                step_results=[StepResult(name="persistent_profile_auth_check", outcome="fail")],
+            )
+
+        profile_dir_arg = profile_dir
+        monkeypatch.setattr(main_module, "run_persistent_profile_auth_check", fake_run_persistent_profile_auth_check)
+
+        exit_code = main_module.main(["--headed", "--keep-open", "--persistent-profile-check", str(profile_dir)])
+
+        captured = capsys.readouterr()
+        assert exit_code == 1
+        assert captured.out == ("summary from test\nPersistent profile auth blocked: suno (manual_verification_required)\n")
+
+    def test_main_rejects_persistent_profile_check_conflicts(self, monkeypatch, capsys, tmp_path: Path) -> None:
+        """Persistent-profile checks should stay separate from create workflows."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        monkeypatch.setattr(
+            main_module,
+            "run_persistent_profile_auth_check",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("browser should not start")),
+        )
+
+        exit_code = main_module.main(["--persistent-profile-check", str(tmp_path / "profile"), "--prompt", "Original song."])
+
+        captured = capsys.readouterr()
+        assert exit_code == 2
+        assert captured.out == "summary from test\n"
+        assert "Invalid persistent-profile check" in captured.err
 
     def test_main_rejects_fill_only_without_request(self, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
         """Fill-only mode needs request content to put into the create box."""
@@ -852,6 +1031,135 @@ class TestProjectSummary:
         assert ("plan", "create-page-plan:None:False:False") in events
         assert ("recorder_finalize", "completed", None) in events
         assert "close" in events
+
+    def test_run_create_visit_can_skip_recording_context_rotation(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The diagnostic flag should avoid the HAR/video context recreation after auth."""
+        fake_result = VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"requests_made": 1},
+            extracted={},
+            step_results=[StepResult(name="navigate_create_page", outcome="ok")],
+        )
+        browser = FakeBrowserManager(None, None)
+        events = browser.events
+        FakeVisitRunner.result = fake_result
+        FakeVisitRunner.events = events
+        FakeSession.events = events
+        FakeSession.authenticated = True
+        FakeSession.login_authenticated = True
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=SimpleNamespace(
+                    observability=SimpleNamespace(mode="always", sessions_dir="data/sessions"),
+                ),
+                site=SimpleNamespace(name="suno"),
+            ),
+        )
+        monkeypatch.setattr(main_module, "BrowserManager", lambda visitor, site, rng=None: browser)
+        monkeypatch.setattr(main_module, "Session", FakeSession)
+        monkeypatch.setattr(main_module, "build_suno_auth_adapter", lambda site: "auth-adapter")
+        monkeypatch.setattr(main_module, "open_session_recorder", lambda visitor, site, browser: FakeRecorder(events))
+        monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
+        monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
+        monkeypatch.setattr(
+            main_module,
+            "build_create_plan",
+            lambda song_request=None, fill_only=False, confirm_submit=False: "create-page-plan",
+        )
+
+        result = main_module.asyncio.run(
+            main_module.run_create_visit(Path("config/config.yaml"), skip_recording_context_rotation=True)
+        )
+
+        assert result is fake_result
+        assert "post_login_warmup" in events
+        assert "enable_har_for_session" not in events
+        assert "start_tracing" in events
+        assert "new_page" in events
+        assert "save_session" in events
+
+    def test_run_persistent_profile_auth_check_uses_persistent_context(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Persistent-profile diagnostics should use a user-data-dir context and no create plan."""
+        context = FakePersistentContext()
+        playwright = FakeAsyncPlaywright(context)
+        events: list[object] = []
+        profile_dir = tmp_path / "suno-profile"
+
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=VisitorConfig(headless=not headed),
+                site=SiteConfig(name="suno", locale="es-ES", timezone_id="Europe/Madrid", page_timeout_seconds=12),
+            ),
+        )
+        monkeypatch.setattr(main_module, "async_playwright", lambda: playwright)
+        monkeypatch.setattr(
+            main_module, "build_suno_auth_adapter", lambda site: SimpleNamespace(auth_marker_url="https://suno.com/create")
+        )
+        monkeypatch.setattr(
+            main_module,
+            "extract_create_page_state",
+            lambda page: main_module.asyncio.sleep(
+                0,
+                result=main_module.CreatePageState(
+                    authenticated=True,
+                    prompt_input_visible=True,
+                    create_button_visible=True,
+                    create_button_enabled=True,
+                ),
+            ),
+        )
+
+        async def fake_keep_browser_open(page: FakePersistentPage) -> None:
+            events.append(("keep_open", page))
+
+        monkeypatch.setattr(main_module, "keep_browser_open", fake_keep_browser_open)
+
+        result = main_module.asyncio.run(
+            main_module.run_persistent_profile_auth_check(
+                Path("config/config.yaml"),
+                profile_dir=profile_dir,
+                headed=True,
+                keep_open=True,
+            )
+        )
+
+        assert result.outcome == "completed"
+        assert playwright.chromium.kwargs["user_data_dir"] == str(profile_dir)
+        assert playwright.chromium.kwargs["headless"] is False
+        assert playwright.chromium.kwargs["locale"] == "es-ES"
+        assert playwright.chromium.kwargs["timezone_id"] == "Europe/Madrid"
+        assert context.page.gotos == [("https://suno.com/create", "domcontentloaded")]
+        assert context.default_timeout == 12000
+        assert ("keep_open", context.page) in events
+        assert context.closed is True
+
+    def test_build_persistent_profile_result_blocks_without_query_string(self, tmp_path: Path) -> None:
+        """Persistent-profile diagnostic output should avoid retaining URL query values."""
+        state = main_module.CreatePageState(
+            authenticated=True,
+            blocked_reason="manual_verification_required",
+            diagnostics={"manual_verification_visible": True},
+        )
+
+        result = main_module.build_persistent_profile_result(
+            state=state,
+            final_url="https://suno.com/create?token=secret#frag",
+            profile_dir=tmp_path / "profile",
+        )
+
+        diagnostics = result.extracted["profile_auth_diagnostics"]
+        assert result.outcome == "blocked"
+        assert result.error == "blocked:manual_verification_required"
+        assert diagnostics["url_path"] == "/create"
+        assert diagnostics["manual_verification_visible"] is True
 
     def test_run_create_visit_passes_fill_only_to_plan(self, monkeypatch) -> None:  # type: ignore[no-untyped-def]
         """Fill-only orchestration should build a non-submitting request plan."""

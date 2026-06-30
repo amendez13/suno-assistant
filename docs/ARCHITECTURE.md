@@ -202,7 +202,13 @@ storage state before any create-page workflow.
 - Pro: Headless runs fail with a clear blocked auth result when the saved
   session is missing or expired.
 - Pro: Manual verification remains operator-controlled.
+- Pro: `--persistent-profile-check` gives operators a bounded diagnostic path
+  for comparing storage-state auth against a full browser profile without
+  filling or submitting a generation request.
 - Con: The operator must refresh local storage state when Suno expires the session.
+- Con: Playwright storage state is less complete than a persistent browser
+  profile, so it may not preserve all cache, IndexedDB, service-worker, or
+  challenge-provider continuity signals.
 
 ### Decision 5: Keep Selectors And Extractors Fixture-Backed
 
@@ -250,6 +256,10 @@ evidence.
 - Pro: Each submit attempt has a traceable local record.
 - Pro: Terminal outcomes can be reviewed from `evidence.jsonl` and manifest counters.
 - Pro: Evidence remains metadata-oriented rather than media archival.
+- Pro: `--skip-recording-context-rotation` lets operators isolate whether HAR or
+  video context recreation changes Suno page state.
+- Con: Skipping recording context rotation intentionally reduces HAR/video
+  evidence for that diagnostic run.
 - Con: Prompt text and visible result metadata are still sensitive local artifacts.
 
 ### Decision 8: Treat Advanced Controls As Visible UI Controls

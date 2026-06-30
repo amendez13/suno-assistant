@@ -163,6 +163,36 @@ Expected confirm-submit behavior:
 - If a CAPTCHA or manual verification challenge is visible, it is recorded as
   `manual_verification_required` and the run stops.
 
+If first-session verification keeps appearing, run the session-continuity
+diagnostics before another submit attempt.
+
+Check whether a full persistent browser profile reaches a different auth or
+challenge state than the normal `state.json` flow:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --persistent-profile-check data/browser/suno-persistent
+```
+
+Then compare a normal confirm-submit run without the post-auth HAR/video context
+rotation:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --skip-recording-context-rotation \
+  --confirm-submit \
+  --request /tmp/suno-smoke-request.yaml
+```
+
+These diagnostics do not solve or bypass CAPTCHA. If a challenge appears, handle
+it manually in the browser or stop the run and inspect the evidence.
+
 To inspect Advanced mode, use the advanced example request:
 
 ```bash
@@ -252,3 +282,10 @@ rm -f data/browser/suno/state.json
 
 Clearing browser state means the next authenticated run will require another
 headed login bootstrap.
+
+Persistent-profile diagnostic directories are also sensitive. Remove them only
+when you deliberately want to discard that browser profile:
+
+```bash
+rm -rf data/browser/suno-persistent
+```
