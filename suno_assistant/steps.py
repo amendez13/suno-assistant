@@ -295,6 +295,12 @@ class SubmitGeneration:
         """Click the first available create/generate button."""
         state = await extract_create_page_state(ctx.page)
         ctx.extracted["suno_create_state"] = state
+        # Snapshot the songs visible before clicking Create. The new song appears
+        # in the workspace within seconds of submit, so this pre-click baseline is
+        # what lets the wait step recognise it as a *new* result.
+        ctx.extracted["suno_pre_submit_result_keys"] = {
+            key for key in (_result_key(result) for result in state.results) if key
+        }
         diagnostics = await _pre_submit_diagnostics(ctx, state)
         ctx.extracted["suno_pre_submit_diagnostics"] = diagnostics
         await ctx.sink.write(
@@ -417,7 +423,10 @@ class WaitForGenerationResult:
         """
         deadline = time.monotonic() + max(0.1, self.timeout_seconds)
         last_state: CreatePageState | None = None
-        baseline_keys: set[str] | None = None
+        # Prefer the pre-submit snapshot: the new song is usually already visible
+        # by the first poll, so a first-poll baseline would wrongly include it.
+        pre_submit_keys = ctx.extracted.get("suno_pre_submit_result_keys")
+        baseline_keys: set[str] | None = pre_submit_keys if isinstance(pre_submit_keys, set) else None
         while time.monotonic() < deadline:
             state = await extract_create_page_state(ctx.page)
             last_state = state

@@ -1026,6 +1026,23 @@ def test_wait_for_generation_result_detects_new_song_against_history() -> None:
     assert ctx.sink.events[-1][0] == "generation_completed"
 
 
+def test_wait_for_generation_result_uses_pre_submit_baseline() -> None:
+    """The new song is usually already visible by the first poll; the pre-submit
+    baseline (captured before clicking Create) is what marks it as new."""
+    ctx = make_ctx(FakePage(["create_with_new_song.html"]))
+    ctx.extracted["suno_pre_submit_result_keys"] = {
+        "aaaaaaaa-1111-2222-3333-444444444444",
+        "bbbbbbbb-1111-2222-3333-444444444444",
+    }
+    request = SongRequest.from_prompt("An original song already shown by the first poll.")
+
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert [r.result_id for r in ctx.extracted["generation_results"]] == ["cccccccc-1111-2222-3333-444444444444"]
+    assert ctx.sink.events[-1][0] == "generation_completed"
+
+
 def test_wait_for_generation_result_waits_while_generation_in_progress() -> None:
     """A new song still shown as generating must not complete until progress clears."""
     ctx = make_ctx(FakePage(["create_with_history_songs.html", "generation_in_progress.html", "create_with_new_song.html"]))
