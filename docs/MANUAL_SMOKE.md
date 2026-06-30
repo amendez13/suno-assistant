@@ -41,16 +41,23 @@ python -m suno_assistant.main --summary-only
 
 ## 2. Bootstrap Login
 
-Open a headed browser and complete Suno login manually:
+Open a headed browser and complete Suno login manually, into the recommended
+persistent profile:
 
 ```bash
-python -m suno_assistant.main --config config/config.yaml --headed --login
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --login \
+  --persistent-profile data/browser/suno-persistent
 ```
 
 Complete any login, MFA, CAPTCHA, consent, or verification step yourself in the
-browser. Suno Assistant does not enter credentials, solve challenges, or bypass
-platform controls. A successful bootstrap saves local browser state under
-`data/browser/suno/state.json`.
+browser, then close the window. Suno Assistant does not enter credentials, solve
+challenges, or bypass platform controls. A successful bootstrap saves the full
+browser profile under `data/browser/suno-persistent/`. Reuse that directory (via
+`--persistent-profile`) on every later run.
+
+> **Deprecated:** `--headed --login` without `--persistent-profile` saves only
+> Playwright storage state under `data/browser/suno/state.json`. Kept for
+> backward compatibility; prefer the persistent profile.
 
 If a later run exits with an auth-required blocked result, repeat this bootstrap
 command.
@@ -92,12 +99,14 @@ fail before Suno is opened.
 
 ## 4. Run The Headed Smoke
 
-Run the bounded generation path in a visible browser:
+Run the bounded generation path in a visible browser, against the persistent
+profile from step 2:
 
 ```bash
 python -m suno_assistant.main \
   --config config/config.yaml \
   --headed \
+  --persistent-profile data/browser/suno-persistent \
   --request /tmp/suno-smoke-request.yaml
 ```
 
@@ -167,7 +176,7 @@ If first-session verification keeps appearing, run the session-continuity
 diagnostics before another submit attempt.
 
 Check whether a full persistent browser profile reaches a different auth or
-challenge state than the normal `state.json` flow:
+challenge state than the deprecated ephemeral `state.json` flow:
 
 ```bash
 python -m suno_assistant.main \

@@ -17,22 +17,29 @@ validated Suno Assistant request file, then run the project create workflow.
    PY
    ```
 4. Run a headed fill-only preview unless the user explicitly asks to submit or
-   says to create/hit Create:
+   says to create/hit Create. Normal use runs against the persistent profile
+   `data/browser/suno-persistent` (bootstrap it once with
+   `--headed --keep-open --login --persistent-profile data/browser/suno-persistent`):
    ```bash
    venv/bin/python -m suno_assistant.main \
      --config config/config.yaml \
      --headed \
      --keep-open \
+     --persistent-profile data/browser/suno-persistent \
      --fill-only \
      --request /path/to/request.yaml
    ```
-5. When the user explicitly approves submission, run one bounded create action:
+5. When the user explicitly approves submission, run one bounded create action
+   against the same persistent profile:
    ```bash
    venv/bin/python -m suno_assistant.main \
      --config config/config.yaml \
      --headed \
+     --persistent-profile data/browser/suno-persistent \
      --request /path/to/request.yaml
    ```
+   The ephemeral `data/browser/suno/state.json` flow (omitting
+   `--persistent-profile`) is deprecated; use it only for backward compatibility.
 6. Monitor the process until it exits. Do not leave `suno_assistant.main`
    running.
 7. Inspect the latest session evidence and, when useful, extract a late video

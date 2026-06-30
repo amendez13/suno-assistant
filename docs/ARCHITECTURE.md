@@ -200,8 +200,12 @@ credits or quota.
 verification flows that should not be automated.
 
 **Decision**: Use GSV's `Session` layer with a Suno auth adapter. The CLI
-supports `--headed --login` for operator-completed login and verifies saved
-storage state before any create-page workflow.
+supports `--headed --login` for operator-completed login and verifies the saved
+session before any create-page workflow. Normal use stores that session in a
+**persistent browser profile** (`--persistent-profile data/browser/suno-persistent`);
+the ephemeral Playwright storage-state file (`data/browser/suno/state.json`,
+used when `--persistent-profile` is omitted) is deprecated and kept only for
+backward compatibility.
 
 **Consequences**:
 - Pro: The app uses the framework session boundary instead of parallel auth code.
@@ -214,10 +218,11 @@ storage state before any create-page workflow.
 - Pro: `--persistent-profile` lets the full create workflow run on a persistent
   profile with no pre-submit context rotation, preserving device/session
   continuity across runs for the high-value submit.
-- Con: The operator must refresh local storage state when Suno expires the session.
-- Con: Playwright storage state is less complete than a persistent browser
-  profile, so it may not preserve all cache, IndexedDB, service-worker, or
-  challenge-provider continuity signals.
+- Con: The operator must re-run the headed login bootstrap when Suno expires the session.
+- Con: The deprecated Playwright storage-state file is less complete than a
+  persistent browser profile, so it does not preserve cache, IndexedDB,
+  service-worker, or challenge-provider continuity signals; the persistent
+  profile is preferred for normal use.
 
 ### Decision 5: Keep Selectors And Extractors Fixture-Backed
 
