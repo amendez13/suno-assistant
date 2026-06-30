@@ -1,12 +1,56 @@
 """Tests for the Suno create-page visit plan."""
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from gsv.apps import get_app
 
 from tests.module_loader import import_source_module
 
 visit_module = import_source_module("visit")
+
+
+class FakeSink:
+    """Capture safe visit lifecycle evidence."""
+
+    def __init__(self) -> None:
+        self.events = []
+
+    async def write(self, event_type: str, payload: dict) -> None:
+        self.events.append((event_type, payload))
+
+
+class SuccessfulStep:
+    """Minimal step that exposes runner metadata and succeeds."""
+
+    name = "successful_step"
+    content_marker = "ready"
+    skip_runner_burst_tick = True
+    url = "https://suno.com/create"
+
+    async def execute(self, ctx: SimpleNamespace):
+        del ctx
+        return visit_module.StepResult(name=self.name, outcome="ok", error=None)
+
+
+class FailingStep:
+    """Minimal step that raises after the wrapper starts timing."""
+
+    name = "failing_step"
+
+    async def execute(self, ctx: SimpleNamespace):
+        del ctx
+        raise RuntimeError("step failed")
+
+
+def make_observed_ctx() -> SimpleNamespace:
+    """Build a context-shaped fake for observed-step tests."""
+    return SimpleNamespace(
+        page=SimpleNamespace(url="https://suno.com/create?draft=123"),
+        sink=FakeSink(),
+    )
 
 
 class TestSunoVisitPlan:
@@ -20,6 +64,37 @@ class TestSunoVisitPlan:
         step = plan.steps[0]
         assert step.name == "navigate_create_page"
         assert step.url == visit_module.SUNO_CREATE_URL
+
+    def test_observed_step_emits_success_lifecycle_evidence(self) -> None:
+        """Observed steps should record safe start and finish events."""
+        ctx = make_observed_ctx()
+        step = visit_module.ObservedStep(SuccessfulStep())
+
+        result = asyncio.run(step.execute(ctx))
+
+        assert result.outcome == "ok"
+        assert step.content_marker == "ready"
+        assert step.skip_runner_burst_tick is True
+        assert step.url == "https://suno.com/create"
+        assert [event[0] for event in ctx.sink.events] == ["visit_step_started", "visit_step_finished"]
+        assert ctx.sink.events[0][1]["step"] == "successful_step"
+        assert ctx.sink.events[0][1]["page"]["url_path"] == "/create"
+        assert ctx.sink.events[1][1]["outcome"] == "ok"
+        assert ctx.sink.events[1][1]["error"] is None
+        assert ctx.sink.events[1][1]["duration_seconds"] >= 0
+
+    def test_observed_step_emits_failure_lifecycle_evidence(self) -> None:
+        """Observed steps should record failed executions before re-raising."""
+        ctx = make_observed_ctx()
+        step = visit_module.ObservedStep(FailingStep())
+
+        with pytest.raises(RuntimeError, match="step failed"):
+            asyncio.run(step.execute(ctx))
+
+        assert [event[0] for event in ctx.sink.events] == ["visit_step_started", "visit_step_finished"]
+        assert ctx.sink.events[1][1]["step"] == "failing_step"
+        assert ctx.sink.events[1][1]["outcome"] == "fail"
+        assert ctx.sink.events[1][1]["error"] == "step failed"
 
     def test_build_plan_accepts_normalized_song_request(self) -> None:
         """The plan factory should expose the request-aware generation boundary."""

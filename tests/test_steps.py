@@ -45,8 +45,10 @@ from suno_assistant.steps import (
     VerifyCreatePageFillable,
     VerifyCreatePageReady,
     WaitForGenerationResult,
+    _challenge_frame_diagnostics,
     _click_first_available,
     _click_locator,
+    _click_locator_with_evidence,
     _collect_song_links_until_stable,
     _dismiss_song_overlay,
     _download_generated_song_audio,
@@ -451,7 +453,9 @@ def test_select_advanced_mode_requires_tab_selector() -> None:
 
     assert result.outcome == "fail"
     assert result.error == "Advanced tab selector not found"
-    assert ctx.sink.events[0][0] == "generation_failed"
+    assert [event[0] for event in ctx.sink.events] == ["ui_click", "generation_failed"]
+    assert ctx.sink.events[0][1]["selector_group"] == ADVANCED_TAB_SELECTORS.name
+    assert ctx.sink.events[0][1]["outcome"] == "skipped"
 
 
 def test_fill_suno_request_fills_prompt_and_required_lyrics() -> None:
@@ -552,6 +556,41 @@ def test_click_locator_falls_back_when_pointer_move_fails() -> None:
     assert page.clicks == [selector]
 
 
+def test_click_locator_with_evidence_records_failed_click() -> None:
+    """Semantic click evidence should record selector attribution on click failures."""
+
+    class FailingTarget:
+        async def bounding_box(self) -> dict[str, float]:
+            return {"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0}
+
+        async def click(self) -> None:
+            raise RuntimeError("target click failed")
+
+    page = FakePage(["create_ready.html"])
+    ctx = make_ctx(page)
+
+    try:
+        asyncio.run(
+            _click_locator_with_evidence(
+                page,
+                FailingTarget(),
+                ctx=ctx,
+                selector_group="create_button",
+                selector="button:has-text('Create')",
+                selector_index=2,
+                phase="submit",
+                source="unit_test",
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "target click failed"
+
+    assert ctx.sink.events[0][0] == "ui_click"
+    assert ctx.sink.events[0][1]["outcome"] == "failed"
+    assert ctx.sink.events[0][1]["selector_index"] == 2
+    assert ctx.sink.events[0][1]["error"] == "target click failed"
+
+
 def test_type_and_diagnostic_small_helpers() -> None:
     """Small helper branches should stay covered without live browser work."""
     selector = TITLE_INPUT_SELECTORS.selectors[0]
@@ -616,8 +655,12 @@ def test_fill_suno_request_fills_advanced_controls() -> None:
     assert result.extracted["advanced_mode"] is True
     assert result.extracted["weirdness"] == 70
     assert result.extracted["style_influence"] == 30
-    assert ctx.sink.events[0][0] == "request_loaded"
-    assert ctx.sink.events[0][1]["advanced_mode"] is True
+    event_names = [event[0] for event in ctx.sink.events]
+    assert event_names == ["ui_click", "ui_click", "request_loaded"]
+    assert ctx.sink.events[0][1]["selector_group"] == FEMALE_VOCAL_SELECTORS.name
+    assert ctx.sink.events[1][1]["selector_group"] == AUTO_STYLE_MODE_SELECTORS.name
+    request_loaded = ctx.sink.events[2][1]
+    assert request_loaded["advanced_mode"] is True
 
 
 def test_fill_suno_request_fills_advanced_button_variants() -> None:
@@ -747,7 +790,12 @@ def test_submit_generation_requires_create_button_selector() -> None:
     assert result.outcome == "fail"
     assert result.error == "Create button is not visible"
     assert ctx.sink.events[0][0] == "generation_pre_submit"
-    assert ctx.sink.events[1][0] == "generation_failed"
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "create_click_skipped",
+        "generation_failed",
+    ]
+    assert ctx.sink.events[1][1]["reason"] == "create_button_not_visible"
 
 
 def test_submit_generation_clicks_create_button_and_records_event() -> None:
@@ -760,10 +808,18 @@ def test_submit_generation_clicks_create_button_and_records_event() -> None:
     assert result.outcome == "ok"
     assert ctx.counters == {"suno.requests_submitted": 1}
     assert ctx.page.clicks == [CREATE_BUTTON_SELECTORS.selectors[0]]
-    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_submitted"]
-    assert ctx.sink.events[1][1]["attempt"] == 1
-    assert ctx.sink.events[1][1]["request_id"]
-    assert ctx.sink.events[1][1]["pre_submit_diagnostics"]["url_path"] == "/create"
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "ui_click",
+        "create_click_attempted",
+        "generation_submitted",
+    ]
+    assert ctx.sink.events[1][1]["selector_group"] == CREATE_BUTTON_SELECTORS.name
+    assert ctx.sink.events[1][1]["selector"] == CREATE_BUTTON_SELECTORS.selectors[0]
+    assert ctx.sink.events[2][1]["source"] == "submit_generation.create_button"
+    assert ctx.sink.events[3][1]["attempt"] == 1
+    assert ctx.sink.events[3][1]["request_id"]
+    assert ctx.sink.events[3][1]["pre_submit_diagnostics"]["url_path"] == "/create"
 
 
 def test_pre_submit_inspection_records_diagnostics_without_clicking_create() -> None:
@@ -816,6 +872,56 @@ def test_pre_submit_diagnostics_records_timing_values() -> None:
     assert diagnostics["seconds_since_ready_check"] >= diagnostics["seconds_since_request_loaded"]
 
 
+def test_pre_submit_diagnostics_records_challenge_frame_counts() -> None:
+    """Submit diagnostics should include provider counts without frame URLs or tokens."""
+    page = FakePage(
+        ["create_ready.html"],
+        evaluate_values=[
+            {
+                "challenge_frame_count": 3,
+                "visible_challenge_frame_count": 1,
+                "challenge_frame_providers": {"hcaptcha": 2, "cloudflare": 1},
+            }
+        ],
+    )
+    ctx = make_ctx(page)
+    state = steps_module.CreatePageState(authenticated=True)
+
+    diagnostics = asyncio.run(_pre_submit_diagnostics(ctx, state))
+
+    assert diagnostics["challenge_frame_count"] == 3
+    assert diagnostics["visible_challenge_frame_count"] == 1
+    assert diagnostics["challenge_frame_providers"] == {"hcaptcha": 2, "cloudflare": 1}
+
+
+def test_challenge_frame_diagnostics_is_defensive() -> None:
+    """Challenge diagnostics should omit unsafe or malformed browser results."""
+    no_evaluate = SimpleNamespace(url="https://suno.com/create")
+    assert asyncio.run(_challenge_frame_diagnostics(no_evaluate)) == {}
+
+    error_page = FakePage(["create_ready.html"], evaluate_error=True)
+    assert asyncio.run(_challenge_frame_diagnostics(error_page)) == {}
+
+    malformed_page = FakePage(["create_ready.html"], evaluate_values=[[]])
+    assert asyncio.run(_challenge_frame_diagnostics(malformed_page)) == {}
+
+    provider_fallback_page = FakePage(
+        ["create_ready.html"],
+        evaluate_values=[
+            {
+                "challenge_frame_count": "2",
+                "visible_challenge_frame_count": 0,
+                "challenge_frame_providers": "not a dict",
+            }
+        ],
+    )
+    assert asyncio.run(_challenge_frame_diagnostics(provider_fallback_page)) == {
+        "challenge_frame_count": 2,
+        "visible_challenge_frame_count": 0,
+        "challenge_frame_providers": {},
+    }
+
+
 def test_submit_generation_rejects_disabled_create_button_after_pre_submit() -> None:
     """Submit should fail before click when the create button is visible but disabled."""
     ctx = make_ctx(FakePage(["create_disabled.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
@@ -826,7 +932,12 @@ def test_submit_generation_rejects_disabled_create_button_after_pre_submit() -> 
     assert result.outcome == "fail"
     assert result.error == "Create button is disabled"
     assert ctx.page.clicks == []
-    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_failed"]
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "create_click_skipped",
+        "generation_failed",
+    ]
+    assert ctx.sink.events[1][1]["reason"] == "create_button_disabled"
 
 
 def test_submit_generation_reports_create_selector_disappearing_after_state_check() -> None:
@@ -838,7 +949,14 @@ def test_submit_generation_reports_create_selector_disappearing_after_state_chec
 
     assert result.outcome == "fail"
     assert result.error == "Create button selector not found"
-    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_failed"]
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "ui_click",
+        "create_click_skipped",
+        "generation_failed",
+    ]
+    assert ctx.sink.events[1][1]["outcome"] == "skipped"
+    assert ctx.sink.events[2][1]["reason"] == "create_button_selector_not_found"
 
 
 def test_submit_generation_blocks_manual_verification_before_clicking() -> None:
@@ -855,7 +973,12 @@ def test_submit_generation_blocks_manual_verification_before_clicking() -> None:
         "suno.blocked_states_detected": 1,
         "suno.manual_verification_blocks_detected": 1,
     }
-    assert [event[0] for event in ctx.sink.events] == ["generation_pre_submit", "generation_blocked"]
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "create_click_skipped",
+        "generation_blocked",
+    ]
+    assert ctx.sink.events[1][1]["reason"] == "blocked:manual_verification_required"
 
 
 def test_first_locator_falls_back_when_locator_has_no_first_property() -> None:

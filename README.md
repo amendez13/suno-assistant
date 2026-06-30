@@ -225,7 +225,9 @@ data/sessions/suno/<session-id>/evidence.jsonl
 ```
 
 Events include `request_loaded`, `generation_pre_submit`, `generation_submitted`,
-`generation_completed`, `generation_blocked`, `generation_failed`,
+`create_click_attempted`, `create_click_skipped`, `ui_click`,
+`visit_step_started`, `visit_step_finished`, `generation_completed`,
+`generation_blocked`, `generation_failed`,
 `song_links_collected`, `song_downloads_completed`, and
 `song_downloads_failed`. Evidence contains the explicit prompt, visible result
 metadata, and local download result paths, so treat session artifacts as

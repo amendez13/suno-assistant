@@ -14,6 +14,8 @@ from gsv.visit.plan import StepResult, VisitOutcome
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .evidence import (
+    create_click_attempted_payload,
+    create_click_skipped_payload,
     generation_blocked_payload,
     generation_completed_payload,
     generation_failed_payload,
@@ -26,6 +28,7 @@ from .evidence import (
     song_links_failed_payload,
     song_renames_completed_payload,
     song_renames_failed_payload,
+    ui_click_payload,
 )
 from .extractors import CreatePageState, extract_create_page_state
 from .requests import SongRequest
@@ -143,7 +146,16 @@ class SelectAdvancedMode:
 
     async def execute(self, ctx: VisitContext) -> StepResult:
         """Click the Advanced tab when an advanced request needs it."""
-        clicked = await _click_first_available(ctx.page, ADVANCED_TAB_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        clicked = await _click_first_available(
+            ctx.page,
+            ADVANCED_TAB_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=ADVANCED_TAB_SELECTORS.name,
+            phase=self.name,
+            source="select_advanced_mode.advanced_tab",
+            record_miss=True,
+        )
         if not clicked:
             await ctx.sink.write(
                 "generation_failed",
@@ -168,10 +180,25 @@ class FillSunoRequest:
             return await self._execute_advanced(ctx)
 
         if self.request.custom_mode:
-            await _click_optional(ctx.page, CUSTOM_MODE_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+            await _click_optional(
+                ctx.page,
+                CUSTOM_MODE_SELECTORS.selectors,
+                rng=getattr(ctx, "rng", None),
+                ctx=ctx,
+                selector_group=CUSTOM_MODE_SELECTORS.name,
+                phase=self.name,
+                source="fill_suno_request.custom_mode",
+            )
             await _gentle_action_pause(ctx)
         if not await _fill_first_available(
-            ctx.page, PROMPT_INPUT_SELECTORS.selectors, self.request.prompt, rng=getattr(ctx, "rng", None)
+            ctx.page,
+            PROMPT_INPUT_SELECTORS.selectors,
+            self.request.prompt,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=PROMPT_INPUT_SELECTORS.name,
+            phase=self.name,
+            source="fill_suno_request.prompt_input",
         ):
             await ctx.sink.write(
                 "generation_failed",
@@ -181,7 +208,14 @@ class FillSunoRequest:
         await _gentle_action_pause(ctx)
         if self.request.style is not None:
             filled_style = await _fill_first_available(
-                ctx.page, STYLE_INPUT_SELECTORS.selectors, self.request.style, rng=getattr(ctx, "rng", None)
+                ctx.page,
+                STYLE_INPUT_SELECTORS.selectors,
+                self.request.style,
+                rng=getattr(ctx, "rng", None),
+                ctx=ctx,
+                selector_group=STYLE_INPUT_SELECTORS.name,
+                phase=self.name,
+                source="fill_suno_request.style_input",
             )
             if not filled_style:
                 await ctx.sink.write(
@@ -192,7 +226,14 @@ class FillSunoRequest:
             await _gentle_action_pause(ctx)
         if self.request.lyrics is not None:
             filled_lyrics = await _fill_first_available(
-                ctx.page, LYRICS_INPUT_SELECTORS.selectors, self.request.lyrics, rng=getattr(ctx, "rng", None)
+                ctx.page,
+                LYRICS_INPUT_SELECTORS.selectors,
+                self.request.lyrics,
+                rng=getattr(ctx, "rng", None),
+                ctx=ctx,
+                selector_group=LYRICS_INPUT_SELECTORS.name,
+                phase=self.name,
+                source="fill_suno_request.lyrics_input",
             )
             if not filled_lyrics:
                 await ctx.sink.write(
@@ -306,9 +347,29 @@ class SubmitGeneration:
         )
         if state.blocked_reason is not None:
             _increment_blocked_counters(ctx, state)
+            await ctx.sink.write(
+                "create_click_skipped",
+                create_click_skipped_payload(
+                    self.request,
+                    phase=self.name,
+                    reason=f"blocked:{state.blocked_reason}",
+                    state=state,
+                    diagnostics=diagnostics,
+                ),
+            )
             await ctx.sink.write("generation_blocked", generation_blocked_payload(self.request, phase=self.name, state=state))
             return StepResult(name=self.name, outcome="fail", error=f"blocked:{state.blocked_reason}", extracted=state)
         if not state.create_button_visible:
+            await ctx.sink.write(
+                "create_click_skipped",
+                create_click_skipped_payload(
+                    self.request,
+                    phase=self.name,
+                    reason="create_button_not_visible",
+                    state=state,
+                    diagnostics=diagnostics,
+                ),
+            )
             await ctx.sink.write(
                 "generation_failed",
                 generation_failed_payload(self.request, phase=self.name, error="Create button is not visible", state=state),
@@ -316,19 +377,59 @@ class SubmitGeneration:
             return StepResult(name=self.name, outcome="fail", error="Create button is not visible", extracted=state)
         if not state.create_button_enabled:
             await ctx.sink.write(
+                "create_click_skipped",
+                create_click_skipped_payload(
+                    self.request,
+                    phase=self.name,
+                    reason="create_button_disabled",
+                    state=state,
+                    diagnostics=diagnostics,
+                ),
+            )
+            await ctx.sink.write(
                 "generation_failed",
                 generation_failed_payload(self.request, phase=self.name, error="Create button is disabled", state=state),
             )
             return StepResult(name=self.name, outcome="fail", error="Create button is disabled", extracted=state)
 
         await _gentle_action_pause(ctx, min_seconds=2.0, max_seconds=4.0)
-        clicked = await _click_first_available(ctx.page, CREATE_BUTTON_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        clicked = await _click_first_available(
+            ctx.page,
+            CREATE_BUTTON_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=CREATE_BUTTON_SELECTORS.name,
+            phase=self.name,
+            source="submit_generation.create_button",
+            record_miss=True,
+        )
         if not clicked:
+            await ctx.sink.write(
+                "create_click_skipped",
+                create_click_skipped_payload(
+                    self.request,
+                    phase=self.name,
+                    reason="create_button_selector_not_found",
+                    state=state,
+                    diagnostics=diagnostics,
+                ),
+            )
             await ctx.sink.write(
                 "generation_failed",
                 generation_failed_payload(self.request, phase=self.name, error="Create button selector not found"),
             )
             return StepResult(name=self.name, outcome="fail", error="Create button selector not found")
+        click = ctx.extracted.get("suno_last_ui_click")
+        await ctx.sink.write(
+            "create_click_attempted",
+            create_click_attempted_payload(
+                self.request,
+                phase=self.name,
+                source="submit_generation.create_button",
+                click=click if isinstance(click, dict) else None,
+                diagnostics=diagnostics,
+            ),
+        )
         ctx.increment("suno.requests_submitted")
         attempt = ctx.counters.get("suno.requests_submitted", 1)
         await ctx.sink.write(
@@ -641,32 +742,106 @@ def classify_song_rename_outcome(step_results: list[StepResult]) -> VisitOutcome
     return "completed"
 
 
-async def _fill_first_available(page: Any, selectors: tuple[str, ...], value: str, *, rng: Any | None = None) -> bool:
+async def _fill_first_available(
+    page: Any,
+    selectors: tuple[str, ...],
+    value: str,
+    *,
+    rng: Any | None = None,
+    ctx: VisitContext | None = None,
+    selector_group: str = "unknown",
+    phase: str = "unknown",
+    source: str = "fill_text",
+) -> bool:
     for selector in selectors:
         locator = page.locator(selector)
-        target = await _first_visible_locator(locator)
+        target, index = await _first_visible_locator_with_index(locator)
         if target is None:
             continue
-        if await _type_into_locator(page, target, value, rng=rng):
+        if await _type_into_locator(
+            page,
+            target,
+            value,
+            rng=rng,
+            ctx=ctx,
+            selector_group=selector_group,
+            selector=selector,
+            selector_index=index,
+            phase=phase,
+            source=source,
+        ):
             return True
         await target.fill(value)
         return True
     return False
 
 
-async def _click_first_available(page: Any, selectors: tuple[str, ...], *, rng: Any | None = None) -> bool:
+async def _click_first_available(
+    page: Any,
+    selectors: tuple[str, ...],
+    *,
+    rng: Any | None = None,
+    ctx: VisitContext | None = None,
+    selector_group: str = "unknown",
+    phase: str = "unknown",
+    source: str = "click",
+    record_miss: bool = False,
+) -> bool:
     for selector in selectors:
         locator = page.locator(selector)
-        target = await _first_visible_locator(locator)
+        target, index = await _first_visible_locator_with_index(locator)
         if target is None:
             continue
-        await _click_locator(page, target, rng=rng)
+        await _click_locator_with_evidence(
+            page,
+            target,
+            rng=rng,
+            ctx=ctx,
+            selector_group=selector_group,
+            selector=selector,
+            selector_index=index,
+            phase=phase,
+            source=source,
+        )
         return True
+    if record_miss and ctx is not None:
+        await ctx.sink.write(
+            "ui_click",
+            ui_click_payload(
+                phase=phase,
+                source=source,
+                selector_group=selector_group,
+                selector=None,
+                selector_index=None,
+                outcome="skipped",
+                click=None,
+                page=_page_ref_payload(page),
+                error="selector_not_found",
+            ),
+        )
     return False
 
 
-async def _click_optional(page: Any, selectors: tuple[str, ...], *, rng: Any | None = None) -> None:
-    await _click_first_available(page, selectors, rng=rng)
+async def _click_optional(
+    page: Any,
+    selectors: tuple[str, ...],
+    *,
+    rng: Any | None = None,
+    ctx: VisitContext | None = None,
+    selector_group: str = "unknown",
+    phase: str = "unknown",
+    source: str = "optional_click",
+) -> None:
+    await _click_first_available(
+        page,
+        selectors,
+        rng=rng,
+        ctx=ctx,
+        selector_group=selector_group,
+        phase=phase,
+        source=source,
+        record_miss=False,
+    )
 
 
 async def _pre_submit_diagnostics(ctx: VisitContext, state: CreatePageState) -> dict[str, Any]:
@@ -682,6 +857,7 @@ async def _pre_submit_diagnostics(ctx: VisitContext, state: CreatePageState) -> 
         "blocked_reason": state.blocked_reason,
         "manual_verification_visible": bool(state.diagnostics.get("manual_verification_visible", False)),
     }
+    diagnostics.update(await _challenge_frame_diagnostics(ctx.page))
     if isinstance(request_loaded_at, (int, float)):
         diagnostics["seconds_since_request_loaded"] = round(max(0.0, now - float(request_loaded_at)), 3)
     if isinstance(ready_checked_at, (int, float)):
@@ -698,13 +874,35 @@ def _safe_url_path(url: str) -> str:
     return parsed.path or "/"
 
 
-async def _type_into_locator(page: Any, target: Any, value: str, *, rng: Any | None = None) -> bool:
+async def _type_into_locator(
+    page: Any,
+    target: Any,
+    value: str,
+    *,
+    rng: Any | None = None,
+    ctx: VisitContext | None = None,
+    selector_group: str = "unknown",
+    selector: str | None = None,
+    selector_index: int | None = None,
+    phase: str = "unknown",
+    source: str = "type_into_locator",
+) -> bool:
     keyboard = getattr(page, "keyboard", None)
     keyboard_type = getattr(keyboard, "type", None)
     if not callable(keyboard_type):
         return False
     try:
-        await _click_locator(page, target, rng=rng)
+        await _click_locator_with_evidence(
+            page,
+            target,
+            rng=rng,
+            ctx=ctx,
+            selector_group=selector_group,
+            selector=selector,
+            selector_index=selector_index,
+            phase=phase,
+            source=source,
+        )
         await target.fill("")
         delay = _typing_delay_ms(rng)
         await keyboard_type(value, delay=delay)
@@ -713,7 +911,54 @@ async def _type_into_locator(page: Any, target: Any, value: str, *, rng: Any | N
         return False
 
 
-async def _click_locator(page: Any, target: Any, *, rng: Any | None = None) -> None:
+async def _click_locator_with_evidence(
+    page: Any,
+    target: Any,
+    *,
+    rng: Any | None = None,
+    ctx: VisitContext | None = None,
+    selector_group: str = "unknown",
+    selector: str | None = None,
+    selector_index: int | None = None,
+    phase: str = "unknown",
+    source: str = "click",
+) -> dict[str, Any]:
+    try:
+        click = await _click_locator(page, target, rng=rng)
+    except Exception as exc:
+        if ctx is not None:
+            await ctx.sink.write(
+                "ui_click",
+                ui_click_payload(
+                    phase=phase,
+                    source=source,
+                    selector_group=selector_group,
+                    selector=selector,
+                    selector_index=selector_index,
+                    outcome="failed",
+                    click=None,
+                    page=_page_ref_payload(page),
+                    error=_safe_error(exc),
+                ),
+            )
+        raise
+    if ctx is not None:
+        payload = ui_click_payload(
+            phase=phase,
+            source=source,
+            selector_group=selector_group,
+            selector=selector,
+            selector_index=selector_index,
+            outcome="ok",
+            click=click,
+            page=_page_ref_payload(page),
+        )
+        ctx.extracted["suno_last_ui_click"] = payload
+        await ctx.sink.write("ui_click", payload)
+    return click
+
+
+async def _click_locator(page: Any, target: Any, *, rng: Any | None = None) -> dict[str, Any]:
     box = None
     try:
         box = await target.bounding_box()
@@ -738,10 +983,92 @@ async def _click_locator(page: Any, target: Any, *, rng: Any | None = None) -> N
             try:
                 await mouse_move(x, y, steps=steps)
                 await mouse_click(x, y)
-                return
-            except Exception:
+                return {
+                    "method": "mouse",
+                    "bounding_box": _box_payload(box),
+                    "click_point": {"x": round(x, 1), "y": round(y, 1)},
+                    "pointer_steps": steps,
+                }
+            except Exception as exc:
+                fallback_error = _safe_error(exc)
                 pass
     await target.click()
+    payload: dict[str, Any] = {"method": "locator"}
+    if isinstance(box, dict):
+        payload["bounding_box"] = _box_payload(box)
+    if "fallback_error" in locals():
+        payload["fallback_error"] = fallback_error
+    return payload
+
+
+async def _challenge_frame_diagnostics(page: Any) -> dict[str, Any]:
+    evaluate = getattr(page, "evaluate", None)
+    if not callable(evaluate):
+        return {}
+    try:
+        result = await evaluate("""() => {
+                const providerFor = (value) => {
+                    const haystack = String(value || "").toLowerCase();
+                    if (haystack.includes("hcaptcha")) return "hcaptcha";
+                    if (haystack.includes("challenges.cloudflare") || haystack.includes("turnstile")) return "cloudflare";
+                    if (haystack.includes("recaptcha")) return "recaptcha";
+                    return null;
+                };
+                const counts = {};
+                let total = 0;
+                let visible = 0;
+                for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+                    const provider = providerFor(`${frame.src} ${frame.title} ${frame.getAttribute("aria-label")}`);
+                    if (!provider) continue;
+                    total += 1;
+                    counts[provider] = (counts[provider] || 0) + 1;
+                    const rect = frame.getBoundingClientRect();
+                    const style = window.getComputedStyle(frame);
+                    if (rect.width > 1 && rect.height > 1 && style.visibility !== "hidden" && style.display !== "none") {
+                        visible += 1;
+                    }
+                }
+                return {
+                    challenge_frame_count: total,
+                    visible_challenge_frame_count: visible,
+                    challenge_frame_providers: counts,
+                };
+            }""")
+    except Exception:
+        return {}
+    if not isinstance(result, dict):
+        return {}
+    providers = result.get("challenge_frame_providers")
+    if not isinstance(providers, dict):
+        providers = {}
+    return {
+        "challenge_frame_count": int(result.get("challenge_frame_count") or 0),
+        "visible_challenge_frame_count": int(result.get("visible_challenge_frame_count") or 0),
+        "challenge_frame_providers": {str(key): int(value) for key, value in providers.items()},
+    }
+
+
+def _page_ref_payload(page: Any) -> dict[str, Any]:
+    return {
+        "page_object_id": f"{page.__class__.__name__}:{id(page):x}",
+        "url_path": _safe_url_path(getattr(page, "url", "")),
+    }
+
+
+def _box_payload(box: dict[str, Any]) -> dict[str, float]:
+    return {
+        "x": round(float(box.get("x", 0.0)), 1),
+        "y": round(float(box.get("y", 0.0)), 1),
+        "width": round(float(box.get("width", 0.0)), 1),
+        "height": round(float(box.get("height", 0.0)), 1),
+    }
+
+
+def _safe_error(exc: Exception) -> str:
+    text = str(exc).replace("\n", " ").strip()
+    if len(text) > 160:
+        text = f"{text[:157]}..."
+    return text or exc.__class__.__name__
 
 
 def _typing_delay_ms(rng: Any | None) -> int:
@@ -1126,23 +1453,32 @@ def _download_timeout_reason(*, download_format: SongDownloadFormat, button_text
 
 async def _fill_advanced_primary_text_fields(ctx: VisitContext, request: SongRequest) -> str | None:
     fields = (
-        (request.lyrics, LYRICS_INPUT_SELECTORS.selectors, "Lyrics input selector not found"),
-        (request.style, STYLE_INPUT_SELECTORS.selectors, "Style input selector not found"),
-        (request.title, TITLE_INPUT_SELECTORS.selectors, "Title input selector not found"),
+        (request.lyrics, LYRICS_INPUT_SELECTORS, "Lyrics input selector not found"),
+        (request.style, STYLE_INPUT_SELECTORS, "Style input selector not found"),
+        (request.title, TITLE_INPUT_SELECTORS, "Title input selector not found"),
     )
     return await _fill_text_fields(ctx, fields)
 
 
 async def _fill_advanced_more_options_text_fields(ctx: VisitContext, request: SongRequest) -> str | None:
-    fields = ((request.exclude_styles, EXCLUDE_STYLES_INPUT_SELECTORS.selectors, "Exclude styles input selector not found"),)
+    fields = ((request.exclude_styles, EXCLUDE_STYLES_INPUT_SELECTORS, "Exclude styles input selector not found"),)
     return await _fill_text_fields(ctx, fields)
 
 
-async def _fill_text_fields(ctx: VisitContext, fields: tuple[tuple[str | None, tuple[str, ...], str], ...]) -> str | None:
-    for value, selectors, error in fields:
+async def _fill_text_fields(ctx: VisitContext, fields: tuple[tuple[str | None, Any, str], ...]) -> str | None:
+    for value, selector_group, error in fields:
         if value is None:
             continue
-        if not await _fill_first_available(ctx.page, selectors, value, rng=getattr(ctx, "rng", None)):
+        if not await _fill_first_available(
+            ctx.page,
+            selector_group.selectors,
+            value,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=selector_group.name,
+            phase="fill_suno_request",
+            source=f"fill_suno_request.{selector_group.name}",
+        ):
             return error
         await _gentle_action_pause(ctx)
     return None
@@ -1150,19 +1486,59 @@ async def _fill_text_fields(ctx: VisitContext, fields: tuple[tuple[str | None, t
 
 async def _apply_advanced_button_fields(ctx: VisitContext, request: SongRequest) -> None:
     if request.instrumental:
-        await _click_optional(ctx.page, INSTRUMENTAL_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        await _click_optional(
+            ctx.page,
+            INSTRUMENTAL_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=INSTRUMENTAL_SELECTORS.name,
+            phase="fill_suno_request",
+            source="fill_suno_request.instrumental",
+        )
         await _gentle_action_pause(ctx)
     if request.vocal_gender == "male":
-        await _click_optional(ctx.page, MALE_VOCAL_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        await _click_optional(
+            ctx.page,
+            MALE_VOCAL_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=MALE_VOCAL_SELECTORS.name,
+            phase="fill_suno_request",
+            source="fill_suno_request.male_vocal",
+        )
         await _gentle_action_pause(ctx)
     elif request.vocal_gender == "female":
-        await _click_optional(ctx.page, FEMALE_VOCAL_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        await _click_optional(
+            ctx.page,
+            FEMALE_VOCAL_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=FEMALE_VOCAL_SELECTORS.name,
+            phase="fill_suno_request",
+            source="fill_suno_request.female_vocal",
+        )
         await _gentle_action_pause(ctx)
     if request.style_mode == "manual":
-        await _click_optional(ctx.page, MANUAL_STYLE_MODE_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        await _click_optional(
+            ctx.page,
+            MANUAL_STYLE_MODE_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=MANUAL_STYLE_MODE_SELECTORS.name,
+            phase="fill_suno_request",
+            source="fill_suno_request.manual_style_mode",
+        )
         await _gentle_action_pause(ctx)
     elif request.style_mode == "auto":
-        await _click_optional(ctx.page, AUTO_STYLE_MODE_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+        await _click_optional(
+            ctx.page,
+            AUTO_STYLE_MODE_SELECTORS.selectors,
+            rng=getattr(ctx, "rng", None),
+            ctx=ctx,
+            selector_group=AUTO_STYLE_MODE_SELECTORS.name,
+            phase="fill_suno_request",
+            source="fill_suno_request.auto_style_mode",
+        )
         await _gentle_action_pause(ctx)
 
 
@@ -1174,7 +1550,15 @@ async def _open_more_options_for_advanced_levers(ctx: VisitContext, request: Son
         return
     if expanded is None and await _requested_more_options_controls_visible(ctx.page, request):
         return
-    await _click_optional(ctx.page, MORE_OPTIONS_SELECTORS.selectors, rng=getattr(ctx, "rng", None))
+    await _click_optional(
+        ctx.page,
+        MORE_OPTIONS_SELECTORS.selectors,
+        rng=getattr(ctx, "rng", None),
+        ctx=ctx,
+        selector_group=MORE_OPTIONS_SELECTORS.name,
+        phase="fill_suno_request",
+        source="fill_suno_request.more_options",
+    )
     await _gentle_action_pause(ctx)
 
 
@@ -1324,12 +1708,17 @@ def _first_locator(locator: Any) -> Any:
 
 
 async def _first_visible_locator(locator: Any) -> Any | None:
+    target, _ = await _first_visible_locator_with_index(locator)
+    return target
+
+
+async def _first_visible_locator_with_index(locator: Any) -> tuple[Any | None, int | None]:
     count = int(await locator.count())
     for index in range(count):
         target = _locator_at(locator, index)
         if await target.is_visible():
-            return target
-    return None
+            return target, index
+    return None, None
 
 
 async def _song_menu_candidate_context_texts(target: Any, *, max_depth: int = 4) -> list[str]:
