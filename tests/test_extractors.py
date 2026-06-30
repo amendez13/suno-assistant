@@ -76,6 +76,20 @@ def test_extracts_completed_result_cards() -> None:
     assert state.results[0].url == "/song/song_001"
 
 
+def test_extracts_results_from_bare_song_anchors() -> None:
+    """Current Suno markup lists songs as bare /song/<id> anchors; ids/urls are extracted."""
+    state = classify_create_page_html(load_fixture("create_with_new_song.html"))
+
+    ids = [result.result_id for result in state.results]
+    assert ids == [
+        "cccccccc-1111-2222-3333-444444444444",
+        "aaaaaaaa-1111-2222-3333-444444444444",
+        "bbbbbbbb-1111-2222-3333-444444444444",
+    ]
+    assert state.results[0].url == "/song/cccccccc-1111-2222-3333-444444444444"
+    assert state.diagnostics["results_seen"] == 3
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "reason"),
     [

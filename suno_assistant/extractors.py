@@ -304,18 +304,43 @@ def _blocked_message(document_text: str, reason: BlockedReason | None) -> str | 
     }[reason]
 
 
+_SONG_HREF_MARKERS = ("/song/", "/songs/")
+
+
 def _extract_results(elements: list[_Element]) -> list[SongResultSummary]:
+    """Extract visible generated-song results.
+
+    Detects Suno's current markup (bare ``<a href="/song/<id>">`` links) plus the
+    older ``data-testid``/``class`` song cards, deduplicated by song id/url/title.
+    Titles render in a separate "Play <title> from start" control, so anchor-only
+    results carry a song id and url but may have no title.
+    """
     results: list[SongResultSummary] = []
+    seen: set[str] = set()
     for element in elements:
+        href = element.attrs.get("href", "")
         test_id = element.attrs.get("data-testid", "").casefold()
         class_name = element.attrs.get("class", "").casefold()
-        if "song-card" not in test_id and "result" not in test_id and "song-card" not in class_name:
+        is_song_href = any(marker in href for marker in _SONG_HREF_MARKERS)
+        is_song_card = "song-card" in test_id or "result" in test_id or "song-card" in class_name
+        if not is_song_href and not is_song_card:
             continue
-        results.append(
-            SongResultSummary(
-                title=element.attrs.get("data-title") or element.attrs.get("aria-label") or element.text or None,
-                url=element.attrs.get("href"),
-                result_id=element.attrs.get("data-song-id") or element.attrs.get("data-result-id"),
-            )
-        )
+        result_id = element.attrs.get("data-song-id") or element.attrs.get("data-result-id") or _song_id_from_href(href)
+        url = href or None
+        title = element.attrs.get("data-title") or element.attrs.get("aria-label") or (element.text or None)
+        key = result_id or url or title
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        results.append(SongResultSummary(title=title or None, url=url, result_id=result_id))
     return results
+
+
+def _song_id_from_href(href: str) -> str | None:
+    """Return the song id from a ``/song/<id>`` style href, if present."""
+    for marker in _SONG_HREF_MARKERS:
+        if marker in href:
+            tail = href.split(marker, 1)[1]
+            segment = tail.split("/", 1)[0].split("?", 1)[0].strip()
+            return segment or None
+    return None
