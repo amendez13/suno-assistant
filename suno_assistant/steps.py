@@ -1006,8 +1006,7 @@ async def _challenge_frame_diagnostics(page: Any) -> dict[str, Any]:
     if not callable(evaluate):
         return {}
     try:
-        result = await evaluate(
-            """() => {
+        result = await evaluate("""() => {
                 const providerFor = (value) => {
                     const haystack = String(value || "").toLowerCase();
                     if (haystack.includes("hcaptcha")) return "hcaptcha";
@@ -1034,8 +1033,7 @@ async def _challenge_frame_diagnostics(page: Any) -> dict[str, Any]:
                     visible_challenge_frame_count: visible,
                     challenge_frame_providers: counts,
                 };
-            }"""
-        )
+            }""")
     except Exception:
         return {}
     if not isinstance(result, dict):

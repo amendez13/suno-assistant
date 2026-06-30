@@ -45,8 +45,10 @@ from suno_assistant.steps import (
     VerifyCreatePageFillable,
     VerifyCreatePageReady,
     WaitForGenerationResult,
+    _challenge_frame_diagnostics,
     _click_first_available,
     _click_locator,
+    _click_locator_with_evidence,
     _collect_song_links_until_stable,
     _dismiss_song_overlay,
     _download_generated_song_audio,
@@ -554,6 +556,41 @@ def test_click_locator_falls_back_when_pointer_move_fails() -> None:
     assert page.clicks == [selector]
 
 
+def test_click_locator_with_evidence_records_failed_click() -> None:
+    """Semantic click evidence should record selector attribution on click failures."""
+
+    class FailingTarget:
+        async def bounding_box(self) -> dict[str, float]:
+            return {"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0}
+
+        async def click(self) -> None:
+            raise RuntimeError("target click failed")
+
+    page = FakePage(["create_ready.html"])
+    ctx = make_ctx(page)
+
+    try:
+        asyncio.run(
+            _click_locator_with_evidence(
+                page,
+                FailingTarget(),
+                ctx=ctx,
+                selector_group="create_button",
+                selector="button:has-text('Create')",
+                selector_index=2,
+                phase="submit",
+                source="unit_test",
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "target click failed"
+
+    assert ctx.sink.events[0][0] == "ui_click"
+    assert ctx.sink.events[0][1]["outcome"] == "failed"
+    assert ctx.sink.events[0][1]["selector_index"] == 2
+    assert ctx.sink.events[0][1]["error"] == "target click failed"
+
+
 def test_type_and_diagnostic_small_helpers() -> None:
     """Small helper branches should stay covered without live browser work."""
     selector = TITLE_INPUT_SELECTORS.selectors[0]
@@ -855,6 +892,34 @@ def test_pre_submit_diagnostics_records_challenge_frame_counts() -> None:
     assert diagnostics["challenge_frame_count"] == 3
     assert diagnostics["visible_challenge_frame_count"] == 1
     assert diagnostics["challenge_frame_providers"] == {"hcaptcha": 2, "cloudflare": 1}
+
+
+def test_challenge_frame_diagnostics_is_defensive() -> None:
+    """Challenge diagnostics should omit unsafe or malformed browser results."""
+    no_evaluate = SimpleNamespace(url="https://suno.com/create")
+    assert asyncio.run(_challenge_frame_diagnostics(no_evaluate)) == {}
+
+    error_page = FakePage(["create_ready.html"], evaluate_error=True)
+    assert asyncio.run(_challenge_frame_diagnostics(error_page)) == {}
+
+    malformed_page = FakePage(["create_ready.html"], evaluate_values=[[]])
+    assert asyncio.run(_challenge_frame_diagnostics(malformed_page)) == {}
+
+    provider_fallback_page = FakePage(
+        ["create_ready.html"],
+        evaluate_values=[
+            {
+                "challenge_frame_count": "2",
+                "visible_challenge_frame_count": 0,
+                "challenge_frame_providers": "not a dict",
+            }
+        ],
+    )
+    assert asyncio.run(_challenge_frame_diagnostics(provider_fallback_page)) == {
+        "challenge_frame_count": 2,
+        "visible_challenge_frame_count": 0,
+        "challenge_frame_providers": {},
+    }
 
 
 def test_submit_generation_rejects_disabled_create_button_after_pre_submit() -> None:
