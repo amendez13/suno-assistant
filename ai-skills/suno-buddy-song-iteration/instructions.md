@@ -116,6 +116,21 @@ components/suno_buddy/venv/bin/python -m components.suno_buddy.main \
 
 For preview-only work, omit `--submit`; that runs fill-only mode.
 
+The wrapper runs Suno Assistant against the recommended **persistent browser
+profile** (`data/browser/suno-persistent`, set by `persistent_profile_dir` in
+`components/suno_buddy/config.yaml`), which preserves the authenticated session
+and device continuity across runs. Bootstrap that profile once if it is missing
+or the session expired:
+
+```bash
+cd /Users/alex3m6/Dropbox/projects/suno-assistant
+venv/bin/python -m suno_assistant.main --config config/config.yaml \
+  --headed --keep-open --login --persistent-profile data/browser/suno-persistent
+```
+
+Pass `--no-persistent-profile` to the wrapper only to fall back to the
+deprecated ephemeral `state.json` session for a one-off comparison.
+
 5. Monitor until the process exits. Do not leave `suno_assistant.main`
    running. Note the session directory printed by Suno Assistant, for example:
 
