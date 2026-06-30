@@ -123,6 +123,35 @@ after filling, then stops before Create so the operator can inspect the headed
 browser. The create workflow itself does not download audio files or bypass
 Suno quotas, moderation, CAPTCHA, MFA, or other platform controls.
 
+When investigating repeated first-submit verification, compare the normal
+storage-state flow against a full persistent browser profile without filling or
+submitting:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --persistent-profile-check data/browser/suno-persistent
+```
+
+To test whether post-auth HAR/video context recreation affects the create page,
+run a normal create or confirm-submit flow with recording context rotation
+disabled:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --skip-recording-context-rotation \
+  --confirm-submit \
+  --request examples/advanced-song-request.yaml
+```
+
+Both options are diagnostics only. They do not solve CAPTCHA, bypass manual
+verification, retry around platform controls, or change the default workflow.
+
 Collect visible generated-song titles and links from the authenticated Suno
 library without downloading audio:
 
@@ -176,6 +205,11 @@ controls. Browser storage state is persisted locally between launches under
 other session state can carry across runs. If a later run cannot reach
 `https://suno.com/create` as an authenticated page, it exits with a blocked auth
 result before running any generation plan.
+
+`state.json` is not a complete Chrome profile. For diagnosis only,
+`--persistent-profile-check DIR` uses Playwright's persistent profile mode so
+cookies, cache, IndexedDB, service workers, and other browser-profile state can
+remain in the same user-data directory across calls.
 
 The sample config also supports the framework CLI directly:
 

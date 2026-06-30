@@ -98,6 +98,19 @@ The browser storage state is saved locally under `data/browser/suno/state.json`
 after authenticated runs, so login state, cookie consent, and other local
 session state can be reused on the next launch.
 
+That file is Playwright storage state, not a full browser profile. If repeated
+first-submit verification needs investigation, use `--persistent-profile-check`
+with a dedicated user-data directory to compare full browser-profile continuity
+without filling or submitting anything:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --persistent-profile-check data/browser/suno-persistent
+```
+
 Before running a live prompt-to-song smoke request, review the operator checklist
 in [MANUAL_SMOKE.md](MANUAL_SMOKE.md). Live request-aware runs can consume Suno
 account quota or credits and write prompt/result metadata into local session
@@ -157,6 +170,21 @@ python -m suno_assistant.main --login
 
 For normal runs, missing or expired auth returns a blocked result and tells the
 operator to rerun the headed login bootstrap.
+
+### Session-Continuity Diagnostics
+
+Two diagnostic switches help isolate repeated verification without bypassing it:
+
+- `--persistent-profile-check DIR` opens `https://suno.com/create` using a full
+  Playwright persistent profile directory and reports auth/challenge state. It
+  does not fill fields or click Create.
+- `--skip-recording-context-rotation` runs the normal create workflow without
+  recreating the browser context to enable HAR/video recording after auth. Trace
+  recording can still run, but HAR/video artifacts that require context
+  recreation are intentionally skipped for that diagnostic run.
+
+Use these only for controlled headed investigation. They are not CAPTCHA-solving
+or retry mechanisms.
 
 ### Environment Variables
 

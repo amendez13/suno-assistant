@@ -11,9 +11,12 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import gsv
 from gsv.browser import BrowserManager
+from gsv.browser.fingerprint import build_viewport
+from gsv.browser.primitives import STEALTH_LAUNCH_ARGS, WEBDRIVER_INIT_SCRIPT
 from gsv.config import SiteConfig, VisitorConfig
 from gsv.config.loader import load_config
 from gsv.observability import RunRef, SessionRecorder
@@ -21,8 +24,10 @@ from gsv.pacing import build_pacing
 from gsv.session import Session
 from gsv.visit import VisitContext, VisitResult, VisitRunner
 from gsv.visit.plan import StepResult
+from playwright.async_api import async_playwright
 
 from .auth import AUTH_REQUIRED_MESSAGE, build_suno_auth_adapter
+from .extractors import CreatePageState, extract_create_page_state
 from .logging_config import configure_logging
 from .release_info import get_release_info
 from .requests import SongRequest, SongRequestError, load_song_request
@@ -99,6 +104,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--confirm-submit",
         action="store_true",
         help=("Fill a validated song request, record pre-submit diagnostics, and stop before clicking create/generate."),
+    )
+    parser.add_argument(
+        "--skip-recording-context-rotation",
+        action="store_true",
+        help=(
+            "Run the create workflow without recreating the browser context for HAR/video recording. "
+            "Use this only to diagnose session-continuity issues."
+        ),
+    )
+    parser.add_argument(
+        "--persistent-profile-check",
+        type=Path,
+        metavar="DIR",
+        help=(
+            "Open Suno with a Playwright persistent profile directory and report auth/challenge state without "
+            "filling or submitting."
+        ),
     )
     parser.add_argument(
         "--collect-songs",
@@ -234,6 +256,90 @@ def build_login_result(*, authenticated: bool) -> VisitResult:
     return build_auth_required_result("Suno login did not reach the authenticated create page before timeout.")
 
 
+def build_persistent_profile_result(*, state: CreatePageState, final_url: str, profile_dir: Path) -> VisitResult:
+    """Build a diagnostic result for a persistent-profile auth check."""
+    blocked_reason = state.blocked_reason
+    authenticated = bool(state.authenticated and blocked_reason is None)
+    outcome = "completed" if authenticated else "blocked"
+    error = f"blocked:{blocked_reason}" if blocked_reason is not None else None
+    if not authenticated and error is None:
+        error = "blocked:auth_unconfirmed"
+    extracted = {
+        "profile_auth_diagnostics": {
+            "profile_dir": str(profile_dir),
+            "url_path": _safe_url_path(final_url),
+            "authenticated": state.authenticated,
+            "blocked_reason": blocked_reason,
+            "prompt_input_visible": state.prompt_input_visible,
+            "create_button_visible": state.create_button_visible,
+            "create_button_enabled": state.create_button_enabled,
+            "manual_verification_visible": state.diagnostics.get("manual_verification_visible", False),
+        }
+    }
+    return VisitResult(
+        outcome=outcome,
+        error=error,
+        counters={"persistent_profile_auth_check": 1},
+        extracted=extracted,
+        step_results=[
+            StepResult(
+                name="persistent_profile_auth_check",
+                outcome="ok" if authenticated else "fail",
+                error=error,
+                extracted=extracted["profile_auth_diagnostics"],
+            )
+        ],
+    )
+
+
+def _safe_url_path(url: str) -> str:
+    """Return a URL path without query parameters or fragments."""
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    return parsed.path or "/"
+
+
+async def run_persistent_profile_auth_check(
+    config_path: Path,
+    *,
+    profile_dir: Path,
+    headed: bool = False,
+    keep_open: bool = False,
+) -> VisitResult:
+    """Check Suno auth state with a real persistent browser profile."""
+    resolved = load_runtime_config(config_path, headed=headed)
+    adapter = build_suno_auth_adapter(resolved.site)
+    profile_dir = profile_dir.expanduser()
+    rng = random.Random()
+
+    async with async_playwright() as playwright:
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
+            headless=resolved.visitor.headless,
+            args=STEALTH_LAUNCH_ARGS,
+            viewport=build_viewport(
+                rng,
+                resolved.visitor.fingerprint.viewport_width_range,
+                resolved.visitor.fingerprint.viewport_height_range,
+            ),
+            locale=resolved.site.locale,
+            timezone_id=resolved.site.timezone_id,
+        )
+        await context.add_init_script(WEBDRIVER_INIT_SCRIPT)
+        context.set_default_timeout(resolved.site.page_timeout_seconds * 1000)
+        page = context.pages[0] if context.pages else await context.new_page()
+        try:
+            await page.goto(adapter.auth_marker_url, wait_until="domcontentloaded")
+            state = await extract_create_page_state(page)
+            result = build_persistent_profile_result(state=state, final_url=str(page.url), profile_dir=profile_dir)
+            if keep_open:
+                await keep_browser_open(page)
+            return result
+        finally:
+            await context.close()
+
+
 async def run_create_visit(
     config_path: Path,
     *,
@@ -243,6 +349,7 @@ async def run_create_visit(
     song_request: SongRequest | None = None,
     fill_only: bool = False,
     confirm_submit: bool = False,
+    skip_recording_context_rotation: bool = False,
 ) -> VisitResult:
     """Run a single Suno create-page visit through the gsv runtime."""
     resolved = load_runtime_config(config_path, headed=headed)
@@ -266,7 +373,8 @@ async def run_create_visit(
         post_login_warmup = getattr(session, "post_login_warmup", None)
         if callable(post_login_warmup):
             await post_login_warmup()
-        await browser.enable_har_for_session()
+        if not skip_recording_context_rotation:
+            await browser.enable_har_for_session()
         await browser.start_tracing()
         page = await browser.new_page()
         pacing = build_pacing(resolved.visitor, resolved.site, browser.rate_limiter, rng=random.Random())
@@ -533,6 +641,8 @@ def _collect_songs_conflicts(args: argparse.Namespace) -> bool:
         args.login
         or args.fill_only
         or args.confirm_submit
+        or getattr(args, "skip_recording_context_rotation", False)
+        or getattr(args, "persistent_profile_check", None) is not None
         or args.request is not None
         or args.prompt is not None
         or args.rename_songs is not None
@@ -545,6 +655,8 @@ def _rename_songs_conflicts(args: argparse.Namespace) -> bool:
         args.login
         or args.fill_only
         or args.confirm_submit
+        or getattr(args, "skip_recording_context_rotation", False)
+        or getattr(args, "persistent_profile_check", None) is not None
         or args.request is not None
         or args.prompt is not None
         or args.collect_songs is not None
@@ -557,11 +669,49 @@ def _download_songs_conflicts(args: argparse.Namespace) -> bool:
         args.login
         or args.fill_only
         or args.confirm_submit
+        or getattr(args, "skip_recording_context_rotation", False)
+        or getattr(args, "persistent_profile_check", None) is not None
         or args.request is not None
         or args.prompt is not None
         or args.collect_songs is not None
         or args.rename_songs is not None
     )
+
+
+def _persistent_profile_conflicts(args: argparse.Namespace) -> bool:
+    return bool(
+        args.login
+        or args.fill_only
+        or args.confirm_submit
+        or getattr(args, "skip_recording_context_rotation", False)
+        or args.request is not None
+        or args.prompt is not None
+        or args.collect_songs is not None
+        or args.rename_songs is not None
+        or args.download_songs is not None
+    )
+
+
+def _run_persistent_profile_check_mode(args: argparse.Namespace) -> int:
+    if _persistent_profile_conflicts(args):
+        print(
+            "Invalid persistent-profile check: use --persistent-profile-check without create, login, collection, "
+            "rename, download, or recording-rotation options.",
+            file=sys.stderr,
+        )
+        return 2
+    result = asyncio.run(
+        run_persistent_profile_auth_check(
+            args.config,
+            profile_dir=args.persistent_profile_check,
+            headed=args.headed,
+            keep_open=args.keep_open,
+        )
+    )
+    diagnostics = result.extracted.get("profile_auth_diagnostics", {})
+    reason = diagnostics.get("blocked_reason") or (result.error.removeprefix("blocked:") if result.error else "none")
+    print(f"Persistent profile auth {result.outcome}: {describe_project().site_name} ({reason})")
+    return 0 if result.outcome == "completed" else 1
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatch is intentionally centralized here.
@@ -585,6 +735,8 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatc
     if args.download_results is not None and args.download_songs is None:
         print("Invalid song download request: use --download-results together with --download-songs.", file=sys.stderr)
         return 2
+    if args.persistent_profile_check is not None:
+        return _run_persistent_profile_check_mode(args)
     if args.collect_songs is not None:
         return _run_song_collection_mode(args)
     if args.rename_songs is not None:
@@ -616,6 +768,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatc
             song_request=song_request,
             fill_only=args.fill_only,
             confirm_submit=args.confirm_submit,
+            skip_recording_context_rotation=args.skip_recording_context_rotation,
         )
     )
     print(f"Run {result.outcome}: {describe_project().site_name}")

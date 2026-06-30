@@ -161,6 +161,17 @@ python -m suno_assistant.main --config config/config.yaml --headed --login
 The storage state at `data/browser/suno/state.json` is sensitive local data. Do
 not commit it, copy it into issue threads, or include it in PR artifacts.
 
+For session-continuity diagnostics, `--persistent-profile-check DIR` writes a
+full browser profile to the chosen directory and reports a compact
+`profile_auth_diagnostics` payload in the CLI result. That profile directory is
+also sensitive local data because it can contain cookies, cache, IndexedDB,
+service-worker state, and challenge-provider state.
+
+For context-rotation diagnostics, `--skip-recording-context-rotation` avoids the
+post-auth HAR/video context recreation. Expect less network/video evidence for
+that run; the point is to compare page state with fewer browser-context
+transitions.
+
 ## Suno Generation Evidence
 
 Request-aware generation runs write Suno-specific events through the active GSV
