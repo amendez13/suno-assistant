@@ -17,14 +17,17 @@ import gsv
 from gsv.browser import BrowserManager
 from gsv.browser.fingerprint import build_viewport
 from gsv.browser.primitives import STEALTH_LAUNCH_ARGS, WEBDRIVER_INIT_SCRIPT
+from gsv.browser.rate_limit import RateLimiter
 from gsv.config import SiteConfig, VisitorConfig
 from gsv.config.loader import load_config
+from gsv.config.model import RateLimitConfig
 from gsv.observability import RunRef, SessionRecorder
 from gsv.pacing import build_pacing
 from gsv.session import Session
+from gsv.session.warmup import post_login_warmup as run_post_login_warmup
 from gsv.visit import VisitContext, VisitResult, VisitRunner
 from gsv.visit.plan import StepResult
-from playwright.async_api import async_playwright
+from playwright.async_api import BrowserContext, async_playwright
 
 from .auth import AUTH_REQUIRED_MESSAGE, build_suno_auth_adapter
 from .extractors import CreatePageState, extract_create_page_state
@@ -120,6 +123,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Open Suno with a Playwright persistent profile directory and report auth/challenge state without "
             "filling or submitting."
+        ),
+    )
+    parser.add_argument(
+        "--persistent-profile",
+        type=Path,
+        metavar="DIR",
+        help=(
+            "Run the create workflow through a persistent browser profile directory instead of ephemeral "
+            "storage state. Warmup, fill, and submit all run in the same context with no pre-submit context "
+            "rotation, preserving device/session continuity across runs."
         ),
     )
     parser.add_argument(
@@ -338,6 +351,192 @@ async def run_persistent_profile_auth_check(
             return result
         finally:
             await context.close()
+
+
+def _effective_rate_limit(visitor: VisitorConfig, site: SiteConfig) -> RateLimitConfig:
+    """Return the per-site override or visitor-level default rate limit."""
+    if site.rate_limit is not None:
+        return site.rate_limit
+    return RateLimitConfig(requests_per_hour=visitor.pacing.rate_limit_per_hour)
+
+
+def _build_persistent_har_kwargs(
+    *,
+    visitor: VisitorConfig,
+    site: SiteConfig,
+    session_dir: Path | None,
+) -> tuple[dict[str, Any], str | None, Path | None]:
+    """Build launch kwargs that enable HAR/video recording at context creation."""
+    obs = visitor.observability
+    kwargs: dict[str, Any] = {}
+    if session_dir is None or obs.mode == "off":
+        return kwargs, None, None
+    har_path: str | None = None
+    if obs.har:
+        har_path = str(session_dir / "network.har")
+        kwargs["record_har_path"] = har_path
+        if site.allowed_host_globs:
+            kwargs["record_har_url_filter"] = site.allowed_host_globs[0]
+        if obs.har_content == "omit":
+            kwargs["record_har_content"] = "omit"
+    video_dir: Path | None = None
+    if obs.video:
+        video_dir = session_dir / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        kwargs["record_video_dir"] = str(video_dir)
+        kwargs["record_video_size"] = {"width": 1280, "height": 800}
+    return kwargs, har_path, video_dir
+
+
+async def _finalize_persistent_artifacts(
+    *,
+    recorder: SessionRecorder | None,
+    har_path: str | None,
+    video_dir: Path | None,
+) -> None:
+    """Register HAR/video artifacts flushed when the persistent context closed."""
+    if recorder is None:
+        return
+    if har_path is not None and Path(har_path).exists():
+        recorder.register_artifact("har", har_path)
+        LOGGER.info("HAR finalized: %s", har_path)
+    if video_dir is not None and video_dir.exists():
+        videos = sorted(video_dir.glob("*.webm"))
+        if videos:
+            primary = recorder.session_dir / "video.webm"
+            videos[0].replace(primary)
+            for extra_index, extra in enumerate(videos[1:], start=1):
+                extra.replace(recorder.session_dir / f"video_{extra_index}.webm")
+            recorder.register_artifact("video", str(primary))
+        try:
+            video_dir.rmdir()
+        except OSError:
+            LOGGER.debug("Video temp directory not empty: %s", video_dir)
+
+
+async def run_persistent_create_visit(  # noqa: C901 - keep the persistent create flow together.
+    config_path: Path,
+    *,
+    profile_dir: Path,
+    headed: bool = False,
+    keep_open: bool = False,
+    login: bool = False,
+    song_request: SongRequest | None = None,
+    fill_only: bool = False,
+    confirm_submit: bool = False,
+) -> VisitResult:
+    """Run the create workflow through a persistent profile with no context rotation.
+
+    Warmup, fill, and submit all run in the same persistent browser context so the
+    high-value generation action is not the first action in a freshly created
+    context, and device/session continuity is preserved across runs. This is a
+    continuity-hardening path, not a CAPTCHA/manual-verification bypass.
+    """
+    resolved = load_runtime_config(config_path, headed=headed)
+    adapter = build_suno_auth_adapter(resolved.site)
+    profile_dir = profile_dir.expanduser()
+    rng = random.Random()
+    viewport = build_viewport(
+        rng,
+        resolved.visitor.fingerprint.viewport_width_range,
+        resolved.visitor.fingerprint.viewport_height_range,
+    )
+
+    def browser_meta() -> dict[str, Any]:
+        return {
+            "headless": resolved.visitor.headless,
+            "viewport": dict(viewport),
+            "locale": resolved.site.locale,
+            "timezone_id": resolved.site.timezone_id,
+            "profile": "persistent",
+        }
+
+    recorder = SessionRecorder.open(
+        sessions_dir=Path(resolved.visitor.observability.sessions_dir).expanduser() / resolved.site.name,
+        mode=resolved.visitor.observability.mode,
+        run=RunRef(
+            id=f"suno-create-{uuid.uuid4().hex[:8]}",
+            plan_name=f"{resolved.site.name}:create-persistent",
+            parameters={"source": "suno_assistant.main", "profile": "persistent"},
+            site=resolved.site.name,
+        ),
+        browser_meta_provider=browser_meta,
+    )
+    obs = resolved.visitor.observability
+    har_kwargs, har_path, video_dir = _build_persistent_har_kwargs(
+        visitor=resolved.visitor,
+        site=resolved.site,
+        session_dir=recorder.session_dir if recorder is not None else None,
+    )
+
+    visit_result: VisitResult | None = None
+    tracing_active = False
+    context: BrowserContext | None = None
+    async with async_playwright() as playwright:
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir),
+            headless=resolved.visitor.headless,
+            args=STEALTH_LAUNCH_ARGS,
+            viewport=viewport,
+            locale=resolved.site.locale,
+            timezone_id=resolved.site.timezone_id,
+            **har_kwargs,
+        )
+        try:
+            await context.add_init_script(WEBDRIVER_INIT_SCRIPT)
+            for script in adapter.extra_init_scripts:
+                await context.add_init_script(script)
+            context.set_default_timeout(resolved.site.page_timeout_seconds * 1000)
+            if recorder is not None and obs.mode != "off" and obs.trace:
+                await context.tracing.start(screenshots=True, snapshots=True, sources=False)
+                tracing_active = True
+            page = context.pages[0] if context.pages else await context.new_page()
+
+            await page.goto(adapter.auth_marker_url, wait_until="domcontentloaded")
+            authenticated = adapter.is_authenticated_url(str(page.url))
+            if login:
+                if not authenticated and keep_open:
+                    await keep_browser_open(page)
+                    authenticated = adapter.is_authenticated_url(str(page.url))
+                visit_result = build_login_result(authenticated=authenticated)
+                return visit_result
+            if not authenticated:
+                visit_result = build_auth_required_result()
+                return visit_result
+
+            if resolved.visitor.pacing.post_login_warmup and adapter.warmup_url is not None:
+                await run_post_login_warmup(page, adapter.warmup_url, rng=rng)
+
+            rate_limiter = RateLimiter(config=_effective_rate_limit(resolved.visitor, resolved.site))
+            pacing = build_pacing(resolved.visitor, resolved.site, rate_limiter, rng=rng)
+            visit_ctx = VisitContext(
+                page=page,
+                pacing=pacing,
+                config=resolved.visitor,
+                site=resolved.site,
+                rng=rng,
+                recorder=recorder,
+            )
+            visit_result = await VisitRunner(visit_ctx).run(
+                build_create_plan(song_request=song_request, fill_only=fill_only, confirm_submit=confirm_submit)
+            )
+            if keep_open:
+                await keep_browser_open(page)
+            return visit_result
+        finally:
+            if tracing_active and recorder is not None:
+                trace_path = recorder.session_dir / "trace.zip"
+                try:
+                    await context.tracing.stop(path=str(trace_path))
+                    recorder.register_artifact("trace", trace_path)
+                except Exception:
+                    LOGGER.warning("Failed to stop Playwright tracing", exc_info=True)
+            await context.close()
+            await _finalize_persistent_artifacts(recorder=recorder, har_path=har_path, video_dir=video_dir)
+            if recorder is not None:
+                outcome = visit_result.outcome if visit_result is not None else "failed"
+                error = visit_result.error if visit_result is not None else None
+                recorder.finalize(outcome=outcome, error=error)
 
 
 async def run_create_visit(
@@ -643,6 +842,7 @@ def _collect_songs_conflicts(args: argparse.Namespace) -> bool:
         or args.confirm_submit
         or getattr(args, "skip_recording_context_rotation", False)
         or getattr(args, "persistent_profile_check", None) is not None
+        or getattr(args, "persistent_profile", None) is not None
         or args.request is not None
         or args.prompt is not None
         or args.rename_songs is not None
@@ -657,6 +857,7 @@ def _rename_songs_conflicts(args: argparse.Namespace) -> bool:
         or args.confirm_submit
         or getattr(args, "skip_recording_context_rotation", False)
         or getattr(args, "persistent_profile_check", None) is not None
+        or getattr(args, "persistent_profile", None) is not None
         or args.request is not None
         or args.prompt is not None
         or args.collect_songs is not None
@@ -671,6 +872,7 @@ def _download_songs_conflicts(args: argparse.Namespace) -> bool:
         or args.confirm_submit
         or getattr(args, "skip_recording_context_rotation", False)
         or getattr(args, "persistent_profile_check", None) is not None
+        or getattr(args, "persistent_profile", None) is not None
         or args.request is not None
         or args.prompt is not None
         or args.collect_songs is not None
@@ -758,19 +960,40 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901 - CLI mode dispatc
     if args.confirm_submit and args.fill_only:
         print("Invalid create request: use either --confirm-submit or --fill-only, not both.", file=sys.stderr)
         return 2
-
-    result = asyncio.run(
-        run_create_visit(
-            args.config,
-            headed=args.headed,
-            keep_open=args.keep_open,
-            login=args.login,
-            song_request=song_request,
-            fill_only=args.fill_only,
-            confirm_submit=args.confirm_submit,
-            skip_recording_context_rotation=args.skip_recording_context_rotation,
+    if args.persistent_profile is not None and args.skip_recording_context_rotation:
+        print(
+            "Invalid create request: --persistent-profile already avoids context rotation; "
+            "do not combine it with --skip-recording-context-rotation.",
+            file=sys.stderr,
         )
-    )
+        return 2
+
+    if args.persistent_profile is not None:
+        result = asyncio.run(
+            run_persistent_create_visit(
+                args.config,
+                profile_dir=args.persistent_profile,
+                headed=args.headed,
+                keep_open=args.keep_open,
+                login=args.login,
+                song_request=song_request,
+                fill_only=args.fill_only,
+                confirm_submit=args.confirm_submit,
+            )
+        )
+    else:
+        result = asyncio.run(
+            run_create_visit(
+                args.config,
+                headed=args.headed,
+                keep_open=args.keep_open,
+                login=args.login,
+                song_request=song_request,
+                fill_only=args.fill_only,
+                confirm_submit=args.confirm_submit,
+                skip_recording_context_rotation=args.skip_recording_context_rotation,
+            )
+        )
     print(f"Run {result.outcome}: {describe_project().site_name}")
     return 0 if result.outcome == "completed" else 1
 

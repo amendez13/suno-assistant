@@ -126,6 +126,12 @@ observability mechanics.
    field fill and stops before Create/Generate.
 10. Normal submit mode submits one create/generate action and waits within a
    bounded timeout for result cards or known blocked states.
+10a. With `--persistent-profile DIR`, the create workflow runs through a real
+   persistent browser profile with no pre-submit context rotation: auth check,
+   warmup, fill, and submit all happen in one context so the high-value submit
+   is not the first action in a freshly created context, and device/session
+   continuity (cookies, IndexedDB, service workers, cache) persists across runs.
+   HAR/video/trace are configured at context launch instead of via rotation.
 11. Advanced-mode requests select the Advanced tab, fill visible text inputs,
    expand More Options by its `aria-expanded` state when needed, and set sliders
    from their `aria-valuenow` values with keyboard nudges.
@@ -205,6 +211,9 @@ storage state before any create-page workflow.
 - Pro: `--persistent-profile-check` gives operators a bounded diagnostic path
   for comparing storage-state auth against a full browser profile without
   filling or submitting a generation request.
+- Pro: `--persistent-profile` lets the full create workflow run on a persistent
+  profile with no pre-submit context rotation, preserving device/session
+  continuity across runs for the high-value submit.
 - Con: The operator must refresh local storage state when Suno expires the session.
 - Con: Playwright storage state is less complete than a persistent browser
   profile, so it may not preserve all cache, IndexedDB, service-worker, or
@@ -258,6 +267,8 @@ evidence.
 - Pro: Evidence remains metadata-oriented rather than media archival.
 - Pro: `--skip-recording-context-rotation` lets operators isolate whether HAR or
   video context recreation changes Suno page state.
+- Pro: `--persistent-profile` preserves HAR/video/trace by configuring them at
+  context launch, so continuity does not cost observability.
 - Con: Skipping recording context rotation intentionally reduces HAR/video
   evidence for that diagnostic run.
 - Con: Prompt text and visible result metadata are still sensitive local artifacts.
