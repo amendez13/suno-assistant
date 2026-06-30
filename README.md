@@ -191,25 +191,53 @@ To inspect the page manually in a visible browser and keep it open after the fir
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 ```
 
-Bootstrap your own Suno account session in a headed browser before running
-headless smoke or request-aware flows:
+### Authenticated session: use a persistent profile (recommended)
+
+Normal use stores the authenticated Suno session in a **persistent browser
+profile directory**, `data/browser/suno-persistent/`. Bootstrap login once into
+that profile:
 
 ```bash
-python -m suno_assistant.main --config config/config.yaml --headed --login
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --login \
+  --persistent-profile data/browser/suno-persistent
 ```
 
 Complete Suno login, MFA, CAPTCHA, or other manual verification yourself in the
-browser. Suno Assistant does not automate credentials or bypass platform
-controls. Browser storage state is persisted locally between launches under
-`data/browser/suno/state.json`, so authenticated state, cookie consent, and
-other session state can carry across runs. If a later run cannot reach
-`https://suno.com/create` as an authenticated page, it exits with a blocked auth
-result before running any generation plan.
+browser, then close the window. Suno Assistant does not automate credentials or
+bypass platform controls. Then run create (and other) flows against the same
+profile:
 
-`state.json` is not a complete Chrome profile. For diagnosis only,
-`--persistent-profile-check DIR` uses Playwright's persistent profile mode so
-cookies, cache, IndexedDB, service workers, and other browser-profile state can
-remain in the same user-data directory across calls.
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --persistent-profile data/browser/suno-persistent \
+  --request examples/advanced-song-request.yaml
+```
+
+Reuse the same directory every run. Because it is a full browser profile,
+cookies, cache, IndexedDB, service workers, and device/challenge-provider
+continuity persist across runs, and the create workflow runs with no pre-submit
+context rotation. If a run cannot reach `https://suno.com/create` as an
+authenticated page, it exits with a blocked auth result before running any
+generation plan.
+
+#### Deprecated: ephemeral `state.json` flow
+
+Running `--login` / create **without** `--persistent-profile` falls back to a
+single Playwright storage-state file at `data/browser/suno/state.json` (cookies
++ localStorage only). This path is **deprecated** and kept only for backward
+compatibility. It is not a complete browser profile, so it does not preserve
+IndexedDB, service workers, cache, or device/challenge-provider continuity, and
+it rotates the browser context for recording before the first submit. Prefer the
+persistent profile above for all normal use.
+
+(`--persistent-profile-check DIR` remains available as a read-only auth/challenge
+diagnostic that fills or submits nothing.)
 
 The sample config also supports the framework CLI directly:
 

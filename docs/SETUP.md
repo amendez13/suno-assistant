@@ -90,26 +90,21 @@ python -m suno_assistant.main --config config/config.yaml --headed --keep-open -
 # Or keep a headed browser open for manual inspection
 python -m suno_assistant.main --config config/config.yaml --headed --keep-open
 
-# Or bootstrap your own Suno login session in a headed browser
-python -m suno_assistant.main --config config/config.yaml --headed --login
+# Or bootstrap your own Suno login session into the recommended persistent profile
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --login \
+  --persistent-profile data/browser/suno-persistent
 ```
 
-The browser storage state is saved locally under `data/browser/suno/state.json`
-after authenticated runs, so login state, cookie consent, and other local
-session state can be reused on the next launch.
+Normal use stores the authenticated session in a **persistent browser profile**
+at `data/browser/suno-persistent/`. Reuse that directory on every run with
+`--persistent-profile data/browser/suno-persistent`, so login state, cookies,
+cache, IndexedDB, service workers, and device/challenge-provider continuity carry
+across runs and the create workflow runs with no pre-submit context rotation.
 
-That file is Playwright storage state, not a full browser profile. If repeated
-first-submit verification needs investigation, use `--persistent-profile-check`
-with a dedicated user-data directory to compare full browser-profile continuity
-without filling or submitting anything:
-
-```bash
-python -m suno_assistant.main \
-  --config config/config.yaml \
-  --headed \
-  --keep-open \
-  --persistent-profile-check data/browser/suno-persistent
-```
+> **Deprecated:** running without `--persistent-profile` falls back to a single
+> Playwright storage-state file at `data/browser/suno/state.json` (cookies +
+> localStorage only). It is kept for backward compatibility but is not a full
+> browser profile and lacks the continuity above. Prefer the persistent profile.
 
 Before running a live prompt-to-song smoke request, review the operator checklist
 in [MANUAL_SMOKE.md](MANUAL_SMOKE.md). Live request-aware runs can consume Suno
@@ -150,16 +145,22 @@ deliberately for another operator.
 ### Suno Login Bootstrap
 
 Run the login bootstrap when setting up the project on a new machine or when
-Suno expires the saved browser state:
+Suno expires the saved session. Normal use bootstraps into the persistent
+profile:
 
 ```bash
-python -m suno_assistant.main --config config/config.yaml --headed --login
+python -m suno_assistant.main --config config/config.yaml --headed --keep-open --login \
+  --persistent-profile data/browser/suno-persistent
 ```
 
 Complete the login, MFA, CAPTCHA, or other manual verification in the visible
-browser. Suno Assistant does not type credentials, solve challenges, or bypass
-platform controls. A successful bootstrap persists local storage state under
-`data/browser/suno/state.json`.
+browser, then close the window. Suno Assistant does not type credentials, solve
+challenges, or bypass platform controls. A successful bootstrap persists the full
+browser profile under `data/browser/suno-persistent/`.
+
+> **Deprecated:** `--headed --login` without `--persistent-profile` persists only
+> Playwright storage state at `data/browser/suno/state.json`. Kept for backward
+> compatibility; prefer the persistent profile for all normal use.
 
 Headless login bootstrap is intentionally rejected:
 
