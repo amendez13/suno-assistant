@@ -247,6 +247,28 @@ def generation_completed_payload(request: SongRequest, *, state: CreatePageState
     }
 
 
+def generation_pending_payload(
+    request: SongRequest,
+    *,
+    state: CreatePageState | None = None,
+) -> dict[str, Any]:
+    """Build the generation_pending evidence payload.
+
+    Recorded when a submit succeeded but the new result did not become visible
+    within the bounded wait. This is not a failure; the generation is still
+    processing on Suno and can be confirmed via the song-link collector.
+    """
+    identity = build_request_identity(request)
+    return {
+        "request_id": identity.request_id,
+        "reason": "result_not_confirmed_within_timeout",
+        "result_count": len(state.results) if state is not None else 0,
+        "results": [song_result_payload(result) for result in state.results] if state is not None else [],
+        "page_state": page_state_payload(state) if state is not None else None,
+        "recorded_at": _now_iso(),
+    }
+
+
 def generation_failed_payload(
     request: SongRequest,
     *,

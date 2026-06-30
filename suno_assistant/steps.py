@@ -19,6 +19,7 @@ from .evidence import (
     generation_blocked_payload,
     generation_completed_payload,
     generation_failed_payload,
+    generation_pending_payload,
     generation_pre_submit_payload,
     generation_submitted_payload,
     request_loaded_payload,
@@ -294,6 +295,12 @@ class SubmitGeneration:
         """Click the first available create/generate button."""
         state = await extract_create_page_state(ctx.page)
         ctx.extracted["suno_create_state"] = state
+        # Snapshot the songs visible before clicking Create. The new song appears
+        # in the workspace within seconds of submit, so this pre-click baseline is
+        # what lets the wait step recognise it as a *new* result.
+        ctx.extracted["suno_pre_submit_result_keys"] = {
+            key for key in (_result_key(result) for result in state.results) if key
+        }
         diagnostics = await _pre_submit_diagnostics(ctx, state)
         ctx.extracted["suno_pre_submit_diagnostics"] = diagnostics
         await ctx.sink.write(
@@ -406,9 +413,20 @@ class WaitForGenerationResult:
     skip_runner_burst_tick: bool = True
 
     async def execute(self, ctx: VisitContext) -> StepResult:
-        """Poll loaded page state until completion, block, or timeout."""
+        """Poll loaded page state until a new result appears, a block, or timeout.
+
+        The create page lists prior songs, so completion is detected as a *new*
+        song result (one not present on the first poll) once generation is no
+        longer in progress. This step runs only after a successful submit, so a
+        bounded-wait timeout is reported as a soft ``generation_pending`` result
+        rather than a hard failure.
+        """
         deadline = time.monotonic() + max(0.1, self.timeout_seconds)
         last_state: CreatePageState | None = None
+        # Prefer the pre-submit snapshot: the new song is usually already visible
+        # by the first poll, so a first-poll baseline would wrongly include it.
+        pre_submit_keys = ctx.extracted.get("suno_pre_submit_result_keys")
+        baseline_keys: set[str] | None = pre_submit_keys if isinstance(pre_submit_keys, set) else None
         while time.monotonic() < deadline:
             state = await extract_create_page_state(ctx.page)
             last_state = state
@@ -425,22 +443,25 @@ class WaitForGenerationResult:
                     error=f"blocked:{state.blocked_reason}",
                     extracted=state,
                 )
-            if state.results:
-                ctx.increment("suno.generations_detected", len(state.results))
-                ctx.extracted["generation_results"] = state.results
+            if baseline_keys is None:
+                baseline_keys = {key for key in (_result_key(result) for result in state.results) if key}
+            new_results = [result for result in state.results if _result_key(result) not in baseline_keys]
+            if new_results and not state.generation_in_progress:
+                ctx.increment("suno.generations_detected", len(new_results))
+                ctx.extracted["generation_results"] = new_results
                 await ctx.sink.write("generation_completed", generation_completed_payload(self.request, state=state))
                 return StepResult(name=self.name, outcome="ok", extracted=state)
             await asyncio.sleep(max(0.0, self.poll_interval_seconds))
 
-        error = "Timed out waiting for generation result"
+        ctx.increment("suno.generation_pending")
+        ctx.extracted["suno_generation_pending"] = True
         await ctx.sink.write(
-            "generation_failed",
-            generation_failed_payload(self.request, phase=self.name, error=error, state=last_state),
+            "generation_pending",
+            generation_pending_payload(self.request, state=last_state),
         )
         return StepResult(
             name=self.name,
-            outcome="fail",
-            error=error,
+            outcome="ok",
             extracted=last_state,
         )
 
@@ -1731,6 +1752,11 @@ def _is_blocked_step(result: StepResult) -> bool:
     if isinstance(result.extracted, CreatePageState) and result.extracted.blocked_reason is not None:
         return True
     return bool(result.error and result.error.startswith("blocked:"))
+
+
+def _result_key(result: Any) -> str | None:
+    """Return a stable identity for a visible song result, for baseline diffing."""
+    return getattr(result, "result_id", None) or getattr(result, "url", None) or getattr(result, "title", None)
 
 
 def _increment_blocked_counters(ctx: VisitContext, state: CreatePageState) -> None:

@@ -1012,6 +1012,48 @@ def test_wait_for_generation_result_detects_completed_results() -> None:
     assert classify_generation_outcome([result]) == "completed"
 
 
+def test_wait_for_generation_result_detects_new_song_against_history() -> None:
+    """A new /song/ anchor appearing over the baseline history completes the wait."""
+    ctx = make_ctx(FakePage(["create_with_history_songs.html", "create_with_new_song.html"]))
+    request = SongRequest.from_prompt("An original song that adds to a populated workspace.")
+
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert ctx.counters == {"suno.generations_detected": 1}
+    new_results = ctx.extracted["generation_results"]
+    assert [r.result_id for r in new_results] == ["cccccccc-1111-2222-3333-444444444444"]
+    assert ctx.sink.events[-1][0] == "generation_completed"
+
+
+def test_wait_for_generation_result_uses_pre_submit_baseline() -> None:
+    """The new song is usually already visible by the first poll; the pre-submit
+    baseline (captured before clicking Create) is what marks it as new."""
+    ctx = make_ctx(FakePage(["create_with_new_song.html"]))
+    ctx.extracted["suno_pre_submit_result_keys"] = {
+        "aaaaaaaa-1111-2222-3333-444444444444",
+        "bbbbbbbb-1111-2222-3333-444444444444",
+    }
+    request = SongRequest.from_prompt("An original song already shown by the first poll.")
+
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert [r.result_id for r in ctx.extracted["generation_results"]] == ["cccccccc-1111-2222-3333-444444444444"]
+    assert ctx.sink.events[-1][0] == "generation_completed"
+
+
+def test_wait_for_generation_result_waits_while_generation_in_progress() -> None:
+    """A new song still shown as generating must not complete until progress clears."""
+    ctx = make_ctx(FakePage(["create_with_history_songs.html", "generation_in_progress.html", "create_with_new_song.html"]))
+    request = SongRequest.from_prompt("An original song that finishes after a progress tick.")
+
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=1, poll_interval_seconds=0).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert [r.result_id for r in ctx.extracted["generation_results"]] == ["cccccccc-1111-2222-3333-444444444444"]
+
+
 def test_wait_for_generation_result_classifies_prompt_rejection_as_blocked() -> None:
     """Prompt rejection should produce blocked, not generic failed, outcome."""
     ctx = make_ctx(FakePage(["policy_rejected.html"]))
@@ -1026,18 +1068,32 @@ def test_wait_for_generation_result_classifies_prompt_rejection_as_blocked() -> 
     assert classify_generation_outcome([result]) == "blocked"
 
 
-def test_wait_for_generation_result_times_out() -> None:
-    """Bounded waiting should fail instead of looping indefinitely."""
+def test_wait_for_generation_result_times_out_to_pending() -> None:
+    """A bounded-wait timeout after submit is a soft pending result, not a hard failure."""
     ctx = make_ctx(FakePage(["create_ready.html"]))
     request = SongRequest.from_prompt("An original song that times out.")
 
     result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=0.1, poll_interval_seconds=0).execute(ctx))
 
-    assert result.outcome == "fail"
-    assert result.error == "Timed out waiting for generation result"
-    assert ctx.sink.events[0][0] == "generation_failed"
-    assert ctx.sink.events[0][1]["phase"] == "wait_for_generation_result"
-    assert classify_generation_outcome([result]) == "failed"
+    assert result.outcome == "ok"
+    assert ctx.counters == {"suno.generation_pending": 1}
+    assert ctx.extracted["suno_generation_pending"] is True
+    assert ctx.sink.events[-1][0] == "generation_pending"
+    assert ctx.sink.events[-1][1]["reason"] == "result_not_confirmed_within_timeout"
+    assert classify_generation_outcome([result]) == "completed"
+
+
+def test_wait_for_generation_result_ignores_preexisting_history_songs() -> None:
+    """Songs already present on the first poll are the baseline and do not count as new."""
+    ctx = make_ctx(FakePage(["generation_completed.html"]))
+    request = SongRequest.from_prompt("An original song with prior history visible.")
+
+    result = asyncio.run(WaitForGenerationResult(request, timeout_seconds=0.2, poll_interval_seconds=0).execute(ctx))
+
+    # The two history cards are the baseline, so no new result -> soft pending.
+    assert result.outcome == "ok"
+    assert ctx.counters == {"suno.generation_pending": 1}
+    assert "generation_results" not in ctx.extracted
 
 
 def test_collect_generated_song_links_writes_output_file(tmp_path: Path) -> None:
