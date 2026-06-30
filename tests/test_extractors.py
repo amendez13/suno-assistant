@@ -103,6 +103,60 @@ def test_ignores_sidebar_upgrade_copy_when_create_is_enabled() -> None:
     assert state.ready_for_prompt is True
 
 
+def test_ignores_benign_challenge_scripts_when_no_challenge_frame() -> None:
+    """Preloaded turnstile scripts / CDN references must not be a manual-verification block."""
+    state = classify_create_page_html(load_fixture("create_ready_with_challenge_scripts.html"))
+
+    assert state.authenticated is True
+    assert state.blocked_reason is None
+    assert state.create_button_enabled is True
+    assert state.ready_for_prompt is True
+    assert state.diagnostics["manual_verification_visible"] is False
+    assert state.diagnostics["challenge_frame_count"] == 0
+
+
+def test_ignores_policy_footer_links_when_create_is_enabled() -> None:
+    """Footer Privacy/Content/Moderation links must not become a policy block."""
+    state = classify_create_page_html(load_fixture("create_ready_with_policy_links.html"))
+
+    assert state.authenticated is True
+    assert state.blocked_reason is None
+    assert state.create_button_enabled is True
+    assert state.ready_for_prompt is True
+
+
+def test_policy_rejection_requires_an_alert_element() -> None:
+    """A real rejection message inside an alert element is classified as policy_rejected."""
+    state = classify_create_page_html(load_fixture("policy_rejected.html"))
+
+    assert state.blocked_reason == "policy_rejected"
+    assert state.blocked_message
+
+
+def test_manual_verification_requires_a_real_challenge_frame() -> None:
+    """A genuine challenge fixture exposes a counted challenge frame and blocks."""
+    state = classify_create_page_html(load_fixture("manual_verification.html"))
+
+    assert state.blocked_reason == "manual_verification_required"
+    assert state.diagnostics["manual_verification_visible"] is True
+    assert state.diagnostics["challenge_frame_count"] == 1
+
+
+def test_manual_verification_detects_full_page_interstitial_text() -> None:
+    """A frameless full-page interstitial is detected via specific visible text only."""
+    html = (
+        "<!doctype html><html><body><main>"
+        "<h1>Verify you are human</h1>"
+        "<p>Please complete the captcha to continue.</p>"
+        "</main></body></html>"
+    )
+
+    state = classify_create_page_html(html)
+
+    assert state.blocked_reason == "manual_verification_required"
+    assert state.diagnostics["challenge_frame_count"] == 0
+
+
 def test_async_page_extractor_reads_loaded_page_content() -> None:
     """The Playwright-facing extractor should only read the already-loaded page."""
 

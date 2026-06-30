@@ -193,6 +193,52 @@ python -m suno_assistant.main \
 These diagnostics do not solve or bypass CAPTCHA. If a challenge appears, handle
 it manually in the browser or stop the run and inspect the evidence.
 
+### Run the create flow on a persistent profile (continuity path)
+
+The default create flow launches an ephemeral Chromium, injects cookies-only
+`state.json` storage state, and rotates the browser context for HAR/video
+recording before submitting. That means the high-value submit is the first
+action in a freshly created context with no device/session continuity, which is
+exactly when challenge providers tend to insert an interactive verification.
+
+`--persistent-profile DIR` runs the whole create workflow through a real
+persistent browser profile and performs **no pre-submit context rotation**:
+warmup, fill, and submit all happen in the same context, and the profile's
+cookies, IndexedDB, service workers, and cache persist across runs. HAR, video,
+and trace artifacts are configured at launch instead of via rotation, so
+observability is preserved.
+
+First, bootstrap login into the persistent profile once (this seeds the device
+in that profile):
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --keep-open \
+  --login \
+  --persistent-profile data/browser/suno-persistent
+```
+
+Then run create through the same profile on later runs:
+
+```bash
+python -m suno_assistant.main \
+  --config config/config.yaml \
+  --headed \
+  --persistent-profile data/browser/suno-persistent \
+  --confirm-submit \
+  --request /tmp/suno-smoke-request.yaml
+```
+
+Notes:
+
+- Reuse the same `DIR` every run; that is what provides continuity.
+- `--persistent-profile` already avoids context rotation, so it cannot be
+  combined with `--skip-recording-context-rotation`.
+- This is a continuity-hardening path, not a CAPTCHA/manual-verification bypass.
+  Visible verification still stops the run before any submit click.
+
 To inspect Advanced mode, use the advanced example request:
 
 ```bash

@@ -13,18 +13,27 @@ _STYLE_MARKERS = ("style", "genre", "vibe")
 _LYRICS_MARKERS = ("lyrics", "words")
 _CREATE_BUTTON_MARKERS = ("create", "generate")
 _AUTH_TEXT_MARKERS = ("sign in", "log in", "login")
-_CHALLENGE_TEXT_MARKERS = (
-    "captcha",
-    "verify you are human",
-    "verification",
-    "manual verification",
-    "security check",
-    "challenge",
-    "turnstile",
+# Provider markers that identify a real challenge widget, matched only against
+# the attributes of an embedded frame element (src/title/aria-label/class).
+# These mirror the live challenge-frame diagnostics in steps.py and intentionally
+# avoid generic words ("verification", "challenge", "cloudflare") that appear in
+# benign attributes/scripts on a usable page.
+_CHALLENGE_FRAME_MARKERS = (
+    "challenges.cloudflare.com",
     "cf-turnstile",
+    "turnstile",
     "hcaptcha",
     "recaptcha",
-    "cloudflare",
+)
+_CHALLENGE_FRAME_TAGS = {"iframe", "frame"}
+# Unambiguous full-page challenge/interstitial phrases, matched only against
+# VISIBLE document text (never attribute values).
+_CHALLENGE_VISIBLE_TEXT_MARKERS = (
+    "verify you are human",
+    "checking your browser",
+    "complete the captcha",
+    "are you a robot",
+    "press and hold to confirm",
 )
 _QUOTA_TEXT_MARKERS = (
     "not enough credits",
@@ -34,7 +43,11 @@ _QUOTA_TEXT_MARKERS = (
     "subscription required",
     "upgrade to continue",
 )
-_POLICY_TEXT_MARKERS = ("policy", "moderation", "rejected", "not allowed")
+# Rejection-specific words, matched only inside an alert/error element (never a
+# bare document-wide scan that would hit footer "Privacy Policy" links etc.).
+_POLICY_REJECTION_MARKERS = ("rejected", "not allowed", "violat", "moderation", "flagged")
+_POLICY_ALERT_ROLES = {"alert", "alertdialog", "status"}
+_POLICY_ALERT_CLASS_MARKERS = ("error", "alert", "toast", "notification")
 _PROGRESS_TEXT_MARKERS = ("generating", "creating your song", "in progress")
 
 
@@ -128,7 +141,6 @@ def classify_create_page_html(html: str) -> CreatePageState:
     """Classify a Suno create-page HTML snapshot."""
     elements = _parse_elements(html)
     document_text = " ".join(element.text for element in elements).casefold()
-    document_haystack = " ".join(element.haystack for element in elements).casefold()
     results = _extract_results(elements)
     prompt_visible = _has_input(elements, _PROMPT_MARKERS)
     style_visible = _has_input(elements, _STYLE_MARKERS)
@@ -136,9 +148,13 @@ def classify_create_page_html(html: str) -> CreatePageState:
     create_button = _find_create_button(elements)
     create_button_visible = create_button is not None
     create_button_enabled = bool(create_button is not None and not _is_disabled(create_button))
+    challenge_frame_count = _count_challenge_frames(elements)
+    manual_verification_visible = _has_challenge_marker(elements, document_text)
+    policy_rejected_visible = _has_policy_rejection(elements)
     blocked_reason = _blocked_reason(
         document_text=document_text,
-        document_haystack=document_haystack,
+        manual_verification_visible=manual_verification_visible,
+        policy_rejected_visible=policy_rejected_visible,
         prompt_visible=prompt_visible,
         create_button_visible=create_button_visible,
         create_button_enabled=create_button_enabled,
@@ -165,7 +181,8 @@ def classify_create_page_html(html: str) -> CreatePageState:
             "prompt_input_visible": prompt_visible,
             "create_button_visible": create_button_visible,
             "create_button_enabled": create_button_enabled,
-            "manual_verification_visible": _has_challenge_marker(document_haystack),
+            "manual_verification_visible": manual_verification_visible,
+            "challenge_frame_count": challenge_frame_count,
         },
     )
 
@@ -213,24 +230,63 @@ def _is_disabled(element: _Element) -> bool:
 def _blocked_reason(
     *,
     document_text: str,
-    document_haystack: str,
+    manual_verification_visible: bool,
+    policy_rejected_visible: bool,
     prompt_visible: bool,
     create_button_visible: bool,
     create_button_enabled: bool,
 ) -> BlockedReason | None:
-    if _has_challenge_marker(document_haystack):
+    if manual_verification_visible:
         return "manual_verification_required"
     if any(marker in document_text for marker in _AUTH_TEXT_MARKERS):
         return "auth_required"
     if _has_quota_marker(document_text) and (not prompt_visible or not create_button_visible or not create_button_enabled):
         return "quota_unavailable"
-    if any(marker in document_text for marker in _POLICY_TEXT_MARKERS):
+    if policy_rejected_visible:
         return "policy_rejected"
     return None
 
 
-def _has_challenge_marker(document_haystack: str) -> bool:
-    return any(marker in document_haystack for marker in _CHALLENGE_TEXT_MARKERS)
+def _has_policy_rejection(elements: list[_Element]) -> bool:
+    """Return whether an alert/error element reports an actual policy rejection.
+
+    Scoped to alert-like elements so benign page text (a "Privacy Policy" footer
+    link, a "Content Policy" nav item) on an otherwise usable page is not treated
+    as a moderation block.
+    """
+    for element in elements:
+        role = element.attrs.get("role", "").casefold()
+        class_name = element.attrs.get("class", "").casefold()
+        is_alert = role in _POLICY_ALERT_ROLES or any(marker in class_name for marker in _POLICY_ALERT_CLASS_MARKERS)
+        if not is_alert:
+            continue
+        if any(marker in element.text.casefold() for marker in _POLICY_REJECTION_MARKERS):
+            return True
+    return False
+
+
+def _count_challenge_frames(elements: list[_Element]) -> int:
+    """Count embedded frames whose attributes name a real challenge provider."""
+    count = 0
+    for element in elements:
+        if element.tag not in _CHALLENGE_FRAME_TAGS:
+            continue
+        if any(marker in element.haystack for marker in _CHALLENGE_FRAME_MARKERS):
+            count += 1
+    return count
+
+
+def _has_challenge_marker(elements: list[_Element], document_text: str) -> bool:
+    """Return whether real challenge evidence is present.
+
+    Requires an actual challenge-provider frame or an unambiguous full-page
+    interstitial phrase in visible text. A bare substring match in attribute
+    values (e.g. a preloaded turnstile script or a Cloudflare CDN reference on an
+    otherwise usable page) is intentionally not treated as a challenge.
+    """
+    if _count_challenge_frames(elements) > 0:
+        return True
+    return any(marker in document_text for marker in _CHALLENGE_VISIBLE_TEXT_MARKERS)
 
 
 def _has_quota_marker(document_text: str) -> bool:

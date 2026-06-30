@@ -140,6 +140,21 @@ class FakePersistentPage:
         return self.closed
 
 
+class FakeTracing:
+    """Fake Playwright tracing recorder used by persistent-context tests."""
+
+    def __init__(self) -> None:
+        self.started = False
+        self.stopped_path: str | None = None
+
+    async def start(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        del kwargs
+        self.started = True
+
+    async def stop(self, *, path: str) -> None:
+        self.stopped_path = path
+
+
 class FakePersistentContext:
     """Fake persistent browser context used by diagnostic tests."""
 
@@ -149,6 +164,7 @@ class FakePersistentContext:
         self.init_scripts: list[str] = []
         self.default_timeout: int | None = None
         self.closed = False
+        self.tracing = FakeTracing()
 
     async def add_init_script(self, script: str) -> None:
         self.init_scripts.append(script)
@@ -171,9 +187,11 @@ class FakePersistentChromium:
     def __init__(self, context: FakePersistentContext) -> None:
         self.context = context
         self.kwargs: dict[str, object] = {}
+        self.call_count = 0
 
     async def launch_persistent_context(self, **kwargs) -> FakePersistentContext:  # type: ignore[no-untyped-def]
         self.kwargs = kwargs
+        self.call_count += 1
         return self.context
 
 
@@ -1704,6 +1722,245 @@ class TestProjectSummary:
         )
         assert main_module._run_song_download_mode(invalid_download_args) == 2
         assert "Invalid song download request:" in capsys.readouterr().err
+
+    def _patch_persistent_create_deps(  # type: ignore[no-untyped-def]
+        self, monkeypatch, context, events, *, authenticated=True
+    ):
+        """Patch the shared dependencies for run_persistent_create_visit tests."""
+        playwright = FakeAsyncPlaywright(context)
+        monkeypatch.setattr(
+            main_module,
+            "load_runtime_config",
+            lambda config_path, headed=False: main_module.ResolvedRunConfig(  # type: ignore[no-untyped-def]
+                visitor=VisitorConfig(headless=not headed),
+                site=SiteConfig(name="suno", locale="es-ES", timezone_id="Europe/Madrid", page_timeout_seconds=12),
+            ),
+        )
+        monkeypatch.setattr(main_module, "async_playwright", lambda: playwright)
+        monkeypatch.setattr(
+            main_module,
+            "build_suno_auth_adapter",
+            lambda site: SimpleNamespace(
+                auth_marker_url="https://suno.com/create",
+                extra_init_scripts=["// suno-extra"],
+                warmup_url="https://suno.com/library",
+                is_authenticated_url=lambda url: authenticated and "/create" in url,
+            ),
+        )
+        monkeypatch.setattr(main_module.SessionRecorder, "open", lambda **kwargs: FakeRecorder(events))
+        monkeypatch.setattr(main_module, "build_pacing", lambda visitor, site, rate_limiter, rng=None: "pacing")
+        monkeypatch.setattr(main_module, "VisitRunner", FakeVisitRunner)
+        monkeypatch.setattr(
+            main_module,
+            "build_create_plan",
+            lambda song_request=None, fill_only=False, confirm_submit=False: f"plan:{fill_only}:{confirm_submit}",
+        )
+
+        async def fake_warmup(page, warmup_url, *, rng=None):  # type: ignore[no-untyped-def]
+            del page, rng
+            events.append(("warmup", warmup_url))
+            return True
+
+        monkeypatch.setattr(main_module, "run_post_login_warmup", fake_warmup)
+        return playwright
+
+    def test_run_persistent_create_visit_uses_single_context_with_warmup_before_plan(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """The persistent create path runs warmup, fill, and submit in one un-rotated context."""
+        context = FakePersistentContext()
+        events: list[object] = []
+        fake_result = VisitResult(
+            outcome="completed",
+            error=None,
+            counters={"suno.generation_submitted": 1},
+            extracted={},
+            step_results=[StepResult(name="submit_generation", outcome="ok")],
+        )
+        FakeVisitRunner.result = fake_result
+        FakeVisitRunner.events = events
+        profile_dir = tmp_path / "suno-profile"
+        playwright = self._patch_persistent_create_deps(monkeypatch, context, events)
+
+        result = main_module.asyncio.run(
+            main_module.run_persistent_create_visit(
+                Path("config/config.yaml"),
+                profile_dir=profile_dir,
+                headed=True,
+            )
+        )
+
+        assert result is fake_result
+        # No context rotation: exactly one persistent context is ever launched.
+        assert playwright.chromium.call_count == 1
+        assert playwright.chromium.kwargs["user_data_dir"] == str(profile_dir)
+        assert playwright.chromium.kwargs["headless"] is False
+        assert playwright.chromium.kwargs["locale"] == "es-ES"
+        assert playwright.chromium.kwargs["timezone_id"] == "Europe/Madrid"
+        # Suno-specific init scripts and the webdriver patch are injected on the same context.
+        assert main_module.WEBDRIVER_INIT_SCRIPT in context.init_scripts
+        assert "// suno-extra" in context.init_scripts
+        # Warmup happens before the plan runs, in the same context that submits.
+        warmup_index = events.index(("warmup", "https://suno.com/library"))
+        plan_index = events.index(("plan", "plan:False:False"))
+        assert warmup_index < plan_index
+        visit_ctx = next(item[1] for item in events if isinstance(item, tuple) and item[0] == "visit_context")
+        assert visit_ctx.page is context.page
+        # Tracing is captured on the same context (no rotation needed for recording).
+        assert context.tracing.started is True
+        assert context.tracing.stopped_path is not None and context.tracing.stopped_path.endswith("trace.zip")
+        assert any(item[:2] == ("register_artifact", "trace") for item in events)
+        assert ("recorder_finalize", "completed", None) in events
+        assert context.closed is True
+
+    def test_run_persistent_create_visit_blocks_when_unauthenticated(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """An unauthenticated persistent profile blocks before any fill/submit plan runs."""
+        context = FakePersistentContext()
+        events: list[object] = []
+        FakeVisitRunner.result = VisitResult(outcome="completed", error=None, counters={}, extracted={}, step_results=[])
+        FakeVisitRunner.events = events
+        self._patch_persistent_create_deps(monkeypatch, context, events, authenticated=False)
+
+        result = main_module.asyncio.run(
+            main_module.run_persistent_create_visit(
+                Path("config/config.yaml"),
+                profile_dir=tmp_path / "profile",
+            )
+        )
+
+        assert result.outcome == "blocked"
+        assert result.counters.get("auth_required") == 1
+        assert not any(label == "plan" for label, *_ in events)
+        assert not any(label == "warmup" for label, *_ in events)
+        assert ("recorder_finalize", "blocked", main_module.AUTH_REQUIRED_MESSAGE) in events
+        assert context.closed is True
+
+    def test_run_persistent_create_visit_login_bootstrap_skips_plan(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Login bootstrap on a persistent profile confirms auth without filling or submitting."""
+        context = FakePersistentContext()
+        events: list[object] = []
+        FakeVisitRunner.result = VisitResult(outcome="completed", error=None, counters={}, extracted={}, step_results=[])
+        FakeVisitRunner.events = events
+        self._patch_persistent_create_deps(monkeypatch, context, events)
+
+        result = main_module.asyncio.run(
+            main_module.run_persistent_create_visit(
+                Path("config/config.yaml"),
+                profile_dir=tmp_path / "profile",
+                headed=True,
+                login=True,
+            )
+        )
+
+        assert result.outcome == "completed"
+        assert result.counters.get("auth_bootstrap_completed") == 1
+        assert not any(label == "plan" for label, *_ in events)
+        assert context.closed is True
+
+    def test_main_routes_persistent_profile_to_persistent_create_visit(
+        self, monkeypatch, capsys, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """--persistent-profile dispatches to the persistent create path, not the ephemeral one."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+        calls: dict[str, object] = {}
+
+        async def fake_persistent(  # type: ignore[no-untyped-def]
+            config_path, *, profile_dir, headed, keep_open, login, song_request, fill_only, confirm_submit
+        ):
+            calls["profile_dir"] = profile_dir
+            calls["prompt"] = song_request.prompt if song_request is not None else None
+            return VisitResult(outcome="completed", error=None, counters={}, extracted={}, step_results=[])
+
+        async def fail_create_visit(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("ephemeral create path must not run for --persistent-profile")
+
+        monkeypatch.setattr(main_module, "run_persistent_create_visit", fake_persistent)
+        monkeypatch.setattr(main_module, "run_create_visit", fail_create_visit)
+
+        profile_dir = tmp_path / "profile"
+        exit_code = main_module.main(["--persistent-profile", str(profile_dir), "--prompt", "An original song."])
+
+        assert exit_code == 0
+        assert calls["profile_dir"] == profile_dir
+        assert calls["prompt"] == "An original song."
+        assert "Run completed: suno" in capsys.readouterr().out
+
+    def test_main_rejects_persistent_profile_with_skip_rotation(
+        self, monkeypatch, capsys, tmp_path: Path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """--persistent-profile already avoids rotation, so it conflicts with --skip-recording-context-rotation."""
+        monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+        monkeypatch.setattr(main_module, "get_release_info", lambda: {"source": "test"})
+        monkeypatch.setattr(main_module, "dependency_summary", lambda: "summary from test")
+
+        exit_code = main_module.main(["--persistent-profile", str(tmp_path / "profile"), "--skip-recording-context-rotation"])
+
+        assert exit_code == 2
+        assert "already avoids context rotation" in capsys.readouterr().err
+
+    def test_effective_rate_limit_prefers_site_override(self) -> None:
+        """A per-site rate limit override takes precedence over the visitor default."""
+        site = SimpleNamespace(rate_limit="site-limit")
+        visitor = SimpleNamespace(pacing=SimpleNamespace(rate_limit_per_hour=90))
+
+        assert main_module._effective_rate_limit(visitor, site) == "site-limit"
+
+    def test_build_persistent_har_kwargs_enables_har_and_video(self, tmp_path: Path) -> None:
+        """HAR/video recording is configured at launch with a URL filter and content policy."""
+        visitor = SimpleNamespace(observability=SimpleNamespace(mode="always", har=True, video=True, har_content="omit"))
+        site = SimpleNamespace(allowed_host_globs=["https://suno.com/**"])
+
+        kwargs, har_path, video_dir = main_module._build_persistent_har_kwargs(
+            visitor=visitor, site=site, session_dir=tmp_path
+        )
+
+        assert kwargs["record_har_path"] == str(tmp_path / "network.har")
+        assert kwargs["record_har_url_filter"] == "https://suno.com/**"
+        assert kwargs["record_har_content"] == "omit"
+        assert kwargs["record_video_dir"] == str(tmp_path / "videos")
+        assert kwargs["record_video_size"] == {"width": 1280, "height": 800}
+        assert har_path == str(tmp_path / "network.har")
+        assert video_dir == tmp_path / "videos"
+        assert video_dir.exists()
+
+    def test_build_persistent_har_kwargs_disabled_when_observability_off(self, tmp_path: Path) -> None:
+        """No recording kwargs are produced when observability is off or there is no session dir."""
+        visitor = SimpleNamespace(observability=SimpleNamespace(mode="off", har=True, video=True, har_content="omit"))
+        site = SimpleNamespace(allowed_host_globs=["https://suno.com/**"])
+
+        assert main_module._build_persistent_har_kwargs(visitor=visitor, site=site, session_dir=tmp_path) == ({}, None, None)
+        assert main_module._build_persistent_har_kwargs(
+            visitor=SimpleNamespace(observability=SimpleNamespace(mode="always", har=True, video=True, har_content="omit")),
+            site=site,
+            session_dir=None,
+        ) == ({}, None, None)
+
+    def test_finalize_persistent_artifacts_registers_har_and_video(self, tmp_path: Path) -> None:
+        """Flushed HAR/video files are promoted and registered after the context closes."""
+        events: list[object] = []
+        recorder = FakeRecorder(events)
+        har_path = recorder.session_dir / "network.har"
+        har_path.write_text("{}", encoding="utf-8")
+        video_dir = recorder.session_dir / "videos"
+        video_dir.mkdir()
+        (video_dir / "a.webm").write_bytes(b"a")
+        (video_dir / "b.webm").write_bytes(b"b")
+
+        main_module.asyncio.run(
+            main_module._finalize_persistent_artifacts(recorder=recorder, har_path=str(har_path), video_dir=video_dir)
+        )
+
+        assert ("register_artifact", "har", str(har_path)) in events
+        assert ("register_artifact", "video", str(recorder.session_dir / "video.webm")) in events
+        assert (recorder.session_dir / "video.webm").exists()
+        assert (recorder.session_dir / "video_1.webm").exists()
+        assert not video_dir.exists()
 
 
 class TestSampleData:

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Benign provider references that must NOT count as an active challenge. -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <link rel="preconnect" href="https://cdn.cloudflare.com" />
+  </head>
+  <body data-analytics="email-verification-pending">
+    <main>
+      <textarea aria-label="Song prompt" placeholder="Describe the song you want"></textarea>
+      <input aria-label="Style of music" placeholder="Style or genre" />
+      <textarea aria-label="Lyrics" placeholder="Lyrics"></textarea>
+      <button role="switch" aria-label="Custom mode">Custom</button>
+      <button aria-label="Create song">Create</button>
+    </main>
+  </body>
+</html>
