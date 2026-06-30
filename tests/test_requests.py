@@ -67,6 +67,13 @@ class TestSongRequest:
         assert request.weirdness == 65
         assert request.style_influence == 80
 
+    def test_style_lyrics_or_custom_mode_require_advanced_controls(self) -> None:
+        """Style/Lyrics live only in the Advanced layout, so they need the Advanced tab."""
+        assert SongRequest.from_mapping({"prompt": "p", "style": "bright pop"}).uses_advanced_controls is True
+        assert SongRequest.from_mapping({"prompt": "p", "lyrics": "la la"}).uses_advanced_controls is True
+        assert SongRequest.from_mapping({"prompt": "p", "custom_mode": True}).uses_advanced_controls is True
+        assert SongRequest.from_prompt("Just a simple prompt with no styling.").uses_advanced_controls is False
+
     @pytest.mark.parametrize(
         ("raw", "message"),
         [

@@ -114,9 +114,18 @@ class SongRequest:
 
     @property
     def uses_advanced_controls(self) -> bool:
-        """Return whether this request needs the Suno Advanced tab."""
+        """Return whether this request needs the Suno Advanced tab.
+
+        Suno's current create UI exposes the Styles and Lyrics fields only in the
+        Advanced layout (the mode toggle is Simple/Advanced; there is no separate
+        "Custom" toggle). Any request that sets a style, lyrics, or custom_mode
+        therefore needs the Advanced tab so those controls exist before fill.
+        """
         return bool(
             self.advanced_mode
+            or self.custom_mode
+            or self.style is not None
+            or self.lyrics is not None
             or self.exclude_styles is not None
             or self.vocal_gender is not None
             or self.style_mode is not None

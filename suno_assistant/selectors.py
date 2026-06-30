@@ -43,6 +43,9 @@ STYLE_INPUT_SELECTORS = SelectorGroup(
     name="style_input",
     selectors=(
         "div[role='button']:has-text('Styles') >> xpath=following::textarea[1]",
+        # The Styles control is a textarea labelled by a sibling "Styles" element;
+        # its placeholder rotates through genre examples, so match by the label.
+        "text=Styles >> xpath=following::textarea[1]",
         "input[placeholder*='style' i]",
         "textarea[placeholder*='style' i]",
         "input[aria-label*='style' i]",

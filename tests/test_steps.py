@@ -458,8 +458,8 @@ def test_select_advanced_mode_requires_tab_selector() -> None:
     assert ctx.sink.events[0][1]["outcome"] == "skipped"
 
 
-def test_fill_suno_request_fills_prompt_and_required_lyrics() -> None:
-    """The fill step should apply request fields through selector fallbacks."""
+def test_fill_suno_request_routes_custom_mode_to_advanced_lyrics() -> None:
+    """custom_mode/lyrics requests fill via the Advanced layout (no Simple description box)."""
     request = SongRequest.from_mapping(
         {
             "prompt": "An original song about careful launches.",
@@ -467,23 +467,32 @@ def test_fill_suno_request_fills_prompt_and_required_lyrics() -> None:
             "custom_mode": True,
         }
     )
-    selectors = {
-        PROMPT_INPUT_SELECTORS.selectors[0],
-        LYRICS_INPUT_SELECTORS.selectors[0],
-    }
-    ctx = make_ctx(FakePage(["create_ready.html"], selectors=selectors))
+    assert request.uses_advanced_controls is True
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors={LYRICS_INPUT_SELECTORS.selectors[0]}))
 
     result = asyncio.run(FillSunoRequest(request).execute(ctx))
 
     assert result.outcome == "ok"
+    assert result.extracted["advanced_mode"] is True
     assert ctx.counters == {"suno.generations_requested": 1, "suno.requests_loaded": 1}
     assert ctx.sink.events[0][0] == "request_loaded"
     assert ctx.sink.events[0][1]["prompt"] == "An original song about careful launches."
-    assert ctx.sink.events[0][1]["request_id"]
     assert ctx.page.fills == [
-        (PROMPT_INPUT_SELECTORS.selectors[0], "An original song about careful launches."),
         (LYRICS_INPUT_SELECTORS.selectors[0], "We launch when the sky is clear"),
     ]
+
+
+def test_fill_suno_request_routes_style_to_advanced_layout() -> None:
+    """A style-only request fills via the Advanced layout where the Styles control exists."""
+    request = SongRequest.from_mapping({"prompt": "An original song about bright mornings.", "style": "bright acoustic pop"})
+    assert request.uses_advanced_controls is True
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors={STYLE_INPUT_SELECTORS.selectors[0]}))
+
+    result = asyncio.run(FillSunoRequest(request).execute(ctx))
+
+    assert result.outcome == "ok"
+    assert result.extracted["advanced_mode"] is True
+    assert ctx.page.fills == [(STYLE_INPUT_SELECTORS.selectors[0], "bright acoustic pop")]
 
 
 def test_fill_first_available_skips_hidden_duplicate_controls() -> None:
