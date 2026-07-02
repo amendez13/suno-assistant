@@ -663,6 +663,89 @@ def test_type_and_diagnostic_small_helpers() -> None:
     assert _safe_url_path("create?draft=1") == "create"
 
 
+def test_text_fill_readback_helpers_cover_defensive_paths() -> None:
+    """Text readback helpers should fail closed when a control cannot verify."""
+
+    class FillRaises:
+        async def fill(self, value: str) -> None:
+            del value
+            raise RuntimeError("fill failed")
+
+    class InputRaisesThenEvaluate:
+        async def input_value(self) -> str:
+            raise RuntimeError("input read failed")
+
+        async def evaluate(self, script: str) -> str:
+            del script
+            return "  readback value  "
+
+    class EvaluateRaises:
+        async def input_value(self) -> None:
+            return None
+
+        async def evaluate(self, script: str) -> str:
+            del script
+            raise RuntimeError("evaluate failed")
+
+    assert asyncio.run(steps_module._fill_locator_value(FillRaises(), "value")) is False
+    assert asyncio.run(steps_module._text_field_value(InputRaisesThenEvaluate())) == "  readback value  "
+    assert asyncio.run(steps_module._text_field_value(EvaluateRaises())) == ""
+    assert asyncio.run(steps_module._wait_for_locator_value(EvaluateRaises(), "missing", timeout_seconds=0.01)) is False
+    assert steps_module._normalise_text_field_value(" value\r\n") == "value"
+
+
+def test_click_and_baseline_defensive_helpers() -> None:
+    """Small submit-safety helpers should cover no-box and already-baselined paths."""
+
+    class NoBoxTarget:
+        def __init__(self) -> None:
+            self.clicked = False
+
+        async def bounding_box(self) -> None:
+            raise RuntimeError("no box")
+
+        async def click(self) -> None:
+            self.clicked = True
+
+    target = NoBoxTarget()
+    payload = asyncio.run(steps_module._click_locator(FakePage(["create_ready.html"]), target))
+    assert payload == {"method": "locator"}
+    assert target.clicked is True
+
+    ctx = make_ctx(FakePage(["create_ready.html"]))
+    ctx.extracted["suno_pre_fill_result_keys"] = {"existing"}
+    asyncio.run(steps_module._capture_pre_fill_result_baseline(ctx))
+    assert ctx.extracted["suno_pre_fill_result_keys"] == {"existing"}
+
+
+def test_slider_and_pause_defensive_helpers() -> None:
+    """Slider readback and pause helpers should cover no-op and invalid-value branches."""
+    selector = WEIRDNESS_SLIDER_SELECTORS.selectors[0]
+    ctx = make_ctx(
+        FakePage(
+            ["create_ready.html"],
+            selectors={selector},
+        )
+    )
+    ctx.page.attribute_values[(selector, "aria-valuenow")] = "58"
+
+    assert asyncio.run(steps_module._set_slider_first_available(ctx, (selector,), 58)) is True
+    assert ctx.page.keyboard_presses == []
+
+    target = ctx.page.locator(selector).first
+    ctx.page.attribute_values[(selector, "aria-valuenow")] = "not-a-number"
+    assert asyncio.run(steps_module._slider_current_value(target)) is None
+
+    asyncio.run(steps_module._nudge_slider_to_value(ctx, current_value=42, target_value=42))
+    assert ctx.page.keyboard_presses == []
+
+    no_pause_ctx = make_ctx(FakePage(["create_ready.html"]))
+    no_pause_ctx._skip_gentle_pause = False
+    asyncio.run(steps_module._gentle_key_pause(no_pause_ctx, min_seconds=0, max_seconds=0))
+    no_pause_ctx.rng = SimpleNamespace(uniform=lambda _min, _max: 0)
+    asyncio.run(steps_module._gentle_key_pause(no_pause_ctx, min_seconds=0, max_seconds=0))
+
+
 def test_fill_suno_request_fills_advanced_controls() -> None:
     """Advanced requests should fill deterministic text, button, and slider controls."""
     request = SongRequest.from_mapping(
