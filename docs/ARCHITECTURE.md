@@ -124,17 +124,21 @@ observability mechanics.
    submits generation.
 9. In `--confirm-submit` mode, Suno Assistant records submit readiness after
    field fill and stops before Create/Generate.
-10. Normal submit mode submits one create/generate action and waits within a
-   bounded timeout for result cards or known blocked states.
+10. Normal submit mode verifies that requested Advanced sliders read back at
+   their target values, confirms no generation activity appeared between the
+   pre-fill baseline and the official submit phase, submits one create/generate
+   action, and waits within a bounded timeout for result cards or known blocked
+   states.
 10a. With `--persistent-profile DIR`, the create workflow runs through a real
    persistent browser profile with no pre-submit context rotation: auth check,
    warmup, fill, and submit all happen in one context so the high-value submit
    is not the first action in a freshly created context, and device/session
    continuity (cookies, IndexedDB, service workers, cache) persists across runs.
    HAR/video/trace are configured at context launch instead of via rotation.
-11. Advanced-mode requests select the Advanced tab, fill visible text inputs,
-   expand More Options by its `aria-expanded` state when needed, and set sliders
-   from their `aria-valuenow` values with keyboard nudges.
+11. Advanced-mode requests select the Advanced tab, fill visible text inputs
+   with readback verification, expand More Options by its `aria-expanded` state
+   when needed, and set sliders from their `aria-valuenow` values with keyboard
+   nudges and readback verification.
 12. With `--collect-songs`, Suno Assistant navigates to the configured Suno
    song-listing page, extracts visible song-card titles and links, normalizes
    Suno URLs, and writes JSON, JSONL, or Markdown output without downloading
@@ -247,11 +251,15 @@ state fixtures under `tests/fixtures/suno/`.
 quota and depends on a changing authenticated UI.
 
 **Decision**: When a validated request is supplied, the plan verifies page
-readiness, fills supported fields, submits once, and waits within a bounded
-timeout for either visible result cards or known blocked states.
+readiness, captures a pre-fill visible-result baseline, fills supported fields,
+submits once only if no generation activity appeared during filling, and waits
+within a bounded timeout for either visible result cards or known blocked
+states.
 
 **Consequences**:
 - Pro: One CLI invocation has an explicit submit boundary and bounded wait.
+- Pro: If an unintended or manual Create action occurs before the submit phase,
+  the official submit fails closed instead of clicking Create again.
 - Pro: Known platform blocks classify as `blocked` instead of false success.
 - Pro: Step tests can use fake pages and offline fixtures before live smoke.
 - Con: Batch submission remains deferred outside the explicit playlist/song download path.
@@ -284,10 +292,12 @@ evidence.
 collapsed More Options controls in the DOM while rendering a separate visible
 panel for the operator.
 
-**Decision**: Fill the first visible matching control, use More Options
+**Decision**: Fill the first visible matching text control through direct
+editable-control fill plus readback verification, use More Options
 `aria-expanded` rather than raw visibility to decide whether to expand the
 panel, and set sliders by focusing the visible slider and nudging from
-`aria-valuenow` to the requested value.
+`aria-valuenow` to the requested value, then reading that value back before the
+fill step can complete.
 
 **Consequences**:
 - Pro: Headed fill-only runs match what the operator sees on screen.

@@ -91,10 +91,15 @@ The Advanced tab renders several controls that matter for reliable automation:
   is collapsed. Visibility checks are not enough. Suno Assistant reads the
   More Options `aria-expanded` state and clicks the expander only when Suno
   reports the panel as collapsed.
+- Text fields are filled through the editable control itself and read back
+  before the request is treated as loaded. The lyrics field prefers the visible
+  "Start writing lyrics..." textarea so hover-sensitive AI lyric helper prompts
+  are not opened by accident.
 - Weirdness and Style Influence are slider controls with `aria-valuenow`.
   Coordinate clicks do not reliably change them in the live UI. Suno Assistant
   focuses the visible slider, reads its current value, and gently nudges it with
-  keyboard arrow presses until it reaches the requested value.
+  keyboard arrow presses until it reaches the requested value. The requested
+  value must read back from the slider before the request is treated as loaded.
 
 These details are covered by unit tests and a headed fill-only smoke path. They
 also explain why the app treats Advanced controls as deterministic UI controls,
@@ -127,9 +132,12 @@ Create-box actions stay bounded and paced:
 - Confirm-submit mode records submit-readiness diagnostics and then stops before
   Create/Generate.
 - Submission mode performs one create action and waits within a bounded timeout.
-- Text entry, clicks, and Advanced field actions prefer visible controls,
-  geometry-based pointer movement when available, keyboard typing, and short
-  human-cadence pauses.
+- Before the Create action, the app compares visible song results against the
+  pre-fill baseline. If generation activity is already visible, it skips Create
+  and fails closed instead of risking a second submit.
+- Text entry uses direct editable-control fill plus readback verification.
+- Clicks and Advanced field actions prefer visible controls, Playwright locator
+  actionability, and short human-cadence pauses.
 - Slider changes use focused keyboard nudges instead of rapid direct DOM
   mutation.
 - Known auth, manual verification, quota, disabled-control, and policy states

@@ -55,10 +55,15 @@ LYRICS_INPUT_SELECTORS = SelectorGroup(
     name="lyrics_input",
     selectors=(
         "textarea[data-testid='lyrics-textarea']",
-        "div[role='button']:has-text('Lyrics') >> xpath=following::textarea[1]",
+        "textarea[placeholder='Start writing lyrics...']",
+        "textarea[placeholder*='Start writing lyrics' i]",
+        "textarea[aria-label='Lyrics']",
         "textarea[placeholder*='lyrics' i]",
         "textarea[aria-label*='lyrics' i]",
         "textarea[name*='lyrics' i]",
+        "[contenteditable='true'][aria-label*='lyrics' i]",
+        "[contenteditable='true'][data-placeholder*='lyrics' i]",
+        "div[role='button']:has-text('Lyrics') >> xpath=following::textarea[1]",
     ),
 )
 TITLE_INPUT_SELECTORS = SelectorGroup(

@@ -114,6 +114,8 @@ class FakeLocator:
     async def fill(self, value: str) -> None:
         self.page.fills.append((self.selector, value))
         self.page.fill_indexes.append((self.selector, self.index))
+        if self.selector not in self.page.no_value_after_fill_selectors:
+            self.page.input_values[(self.selector, self.index)] = value
 
     async def click(self) -> None:
         self.page.clicks.append(self.selector)
@@ -125,6 +127,8 @@ class FakeLocator:
 
     async def focus(self) -> None:
         self.page.focuses.append(self.selector)
+        self.page.focused_selector = self.selector
+        self.page.attribute_values.setdefault((self.selector, "aria-valuenow"), "50")
 
     async def get_attribute(self, name: str) -> str | None:
         value = self.page.attribute_values.get((self.selector, name))
@@ -133,6 +137,9 @@ class FakeLocator:
         if name != "aria-valuenow" or self.selector in self.page.no_value_selectors:
             return None
         return "50"
+
+    async def input_value(self) -> str:
+        return self.page.input_values.get((self.selector, self.index), "")
 
     async def bounding_box(self) -> dict[str, float] | None:
         if self.selector not in self.page.available_selectors:
@@ -215,6 +222,8 @@ class FakePage:
         evaluate_error: bool = False,
         supports_keyboard_type: bool = False,
         keyboard_type_raises: bool = False,
+        keyboard_press_updates_sliders: bool = True,
+        no_value_after_fill_selectors: set[str] | None = None,
         supports_mouse_move: bool = False,
         mouse_move_raises: bool = False,
     ) -> None:
@@ -234,6 +243,8 @@ class FakePage:
         self.evaluate_values = evaluate_values or []
         self.evaluate_error = evaluate_error
         self.keyboard_type_raises = keyboard_type_raises
+        self.keyboard_press_updates_sliders = keyboard_press_updates_sliders
+        self.no_value_after_fill_selectors = no_value_after_fill_selectors or set()
         self.mouse_move_raises = mouse_move_raises
         self.url = "https://suno.com/create"
         self.content_calls = 0
@@ -241,8 +252,10 @@ class FakePage:
         self.evaluate_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.fills: list[tuple[str, str]] = []
         self.fill_indexes: list[tuple[str, int]] = []
+        self.input_values: dict[tuple[str, int], str] = {}
         self.clicks: list[str] = []
         self.focuses: list[str] = []
+        self.focused_selector: str | None = None
         self.mouse_clicks: list[tuple[float, float]] = []
         self.mouse_moves: list[tuple[float, float, int]] = []
         self.gotos: list[str] = []
@@ -296,6 +309,14 @@ class FakePage:
 
     async def _keyboard_press(self, key: str) -> None:
         self.keyboard_presses.append(key)
+        if not self.keyboard_press_updates_sliders or self.focused_selector is None:
+            return
+        attr_key = (self.focused_selector, "aria-valuenow")
+        current = int(round(float(self.attribute_values.get(attr_key, "50"))))
+        if key == "ArrowRight":
+            self.attribute_values[attr_key] = str(min(100, current + 1))
+        elif key == "ArrowLeft":
+            self.attribute_values[attr_key] = str(max(0, current - 1))
 
     async def _keyboard_type(self, text: str, delay: int = 0) -> None:
         if self.keyboard_type_raises:
@@ -482,6 +503,32 @@ def test_fill_suno_request_routes_custom_mode_to_advanced_lyrics() -> None:
     ]
 
 
+def test_fill_suno_request_reports_unverified_advanced_lyrics() -> None:
+    """Requested lyrics must read back before the request is treated as loaded."""
+    request = SongRequest.from_mapping(
+        {
+            "prompt": "An original song about careful launches.",
+            "lyrics": "We launch when the sky is clear",
+            "custom_mode": True,
+        }
+    )
+    selector = LYRICS_INPUT_SELECTORS.selectors[0]
+    ctx = make_ctx(
+        FakePage(
+            ["create_ready.html"],
+            selectors={selector},
+            no_value_after_fill_selectors={selector},
+        )
+    )
+
+    result = asyncio.run(FillSunoRequest(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Lyrics input selector not found"
+    assert ctx.sink.events[0][0] == "generation_failed"
+    assert "request_loaded" not in [event[0] for event in ctx.sink.events]
+
+
 def test_fill_suno_request_routes_style_to_advanced_layout() -> None:
     """A style-only request fills via the Advanced layout where the Styles control exists."""
     request = SongRequest.from_mapping({"prompt": "An original song about bright mornings.", "style": "bright acoustic pop"})
@@ -512,57 +559,59 @@ def test_fill_first_available_skips_hidden_duplicate_controls() -> None:
     assert page.fill_indexes == [(selector, 1)]
 
 
-def test_fill_first_available_uses_keyboard_type_and_jitter_click() -> None:
-    """Real browser paths should prefer visible click geometry and keyboard text entry."""
+def test_fill_first_available_uses_direct_fill_without_pointer_click() -> None:
+    """Text controls should avoid hover-prone pointer clicks and verify direct fill."""
     selector = TITLE_INPUT_SELECTORS.selectors[0]
     page = FakePage(
         ["create_ready.html"],
         selectors={selector},
         supports_keyboard_type=True,
-        supports_mouse_move=True,
     )
 
     filled = asyncio.run(_fill_first_available(page, (selector,), "Careful Sparks"))
 
     assert filled is True
-    assert page.fills == [(selector, "")]
-    assert page.typed_texts == [("Careful Sparks", 30)]
+    assert page.fills == [(selector, "Careful Sparks")]
+    assert page.typed_texts == []
     assert page.clicks == []
-    assert page.mouse_moves
-    assert page.mouse_clicks
+    assert page.mouse_moves == []
+    assert page.mouse_clicks == []
 
 
-def test_fill_first_available_falls_back_when_keyboard_type_fails() -> None:
-    """Keyboard typing failures should fall back to the established locator fill path."""
-    selector = TITLE_INPUT_SELECTORS.selectors[0]
+def test_fill_first_available_continues_after_unverified_selector() -> None:
+    """A visible but wrong selector must not let a requested text field look loaded."""
+    stale_selector = LYRICS_INPUT_SELECTORS.selectors[-1]
+    good_selector = LYRICS_INPUT_SELECTORS.selectors[1]
     page = FakePage(
         ["create_ready.html"],
-        selectors={selector},
+        selectors={stale_selector, good_selector},
         supports_keyboard_type=True,
-        keyboard_type_raises=True,
+        no_value_after_fill_selectors={stale_selector},
     )
 
-    filled = asyncio.run(_fill_first_available(page, (selector,), "Fallback Title"))
+    filled = asyncio.run(_fill_first_available(page, (stale_selector, good_selector), "Fallback Title"))
 
     assert filled is True
-    assert page.fills == [(selector, ""), (selector, "Fallback Title")]
+    assert page.fills == [(stale_selector, "Fallback Title"), (good_selector, "Fallback Title")]
     assert page.typed_texts == []
+    assert page.clicks == []
 
 
-def test_click_locator_falls_back_when_pointer_move_fails() -> None:
-    """Pointer-jitter failures should fall back to a normal locator click."""
+def test_click_locator_uses_locator_click_even_when_mouse_api_exists() -> None:
+    """UI controls should avoid random coordinate mouse clicks."""
     selector = CREATE_BUTTON_SELECTORS.selectors[0]
     page = FakePage(
         ["create_ready.html"],
         selectors={selector},
         supports_mouse_move=True,
-        mouse_move_raises=True,
     )
     target = page.locator(selector).first
 
     asyncio.run(_click_locator(page, target))
 
     assert page.clicks == [selector]
+    assert page.mouse_moves == []
+    assert page.mouse_clicks == []
 
 
 def test_click_locator_with_evidence_records_failed_click() -> None:
@@ -743,6 +792,31 @@ def test_fill_suno_request_reports_missing_advanced_slider() -> None:
     assert ctx.sink.events[0][0] == "generation_failed"
 
 
+def test_fill_suno_request_reports_unverified_advanced_slider() -> None:
+    """Slider fill must read back the requested value before the request is loaded."""
+    request = SongRequest.from_mapping(
+        {
+            "prompt": "An original song about a stuck slider.",
+            "advanced_mode": True,
+            "style_influence": 92,
+        }
+    )
+    ctx = make_ctx(
+        FakePage(
+            ["create_ready.html"],
+            selectors={STYLE_INFLUENCE_SLIDER_SELECTORS.selectors[0]},
+            keyboard_press_updates_sliders=False,
+        )
+    )
+
+    result = asyncio.run(FillSunoRequest(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Style influence slider selector not found"
+    assert ctx.sink.events[0][0] == "generation_failed"
+    assert "request_loaded" not in [event[0] for event in ctx.sink.events]
+
+
 def test_fill_suno_request_opens_more_options_before_advanced_levers() -> None:
     """Hidden Advanced levers should trigger the More Options expander first."""
     request = SongRequest.from_mapping(
@@ -829,6 +903,45 @@ def test_submit_generation_clicks_create_button_and_records_event() -> None:
     assert ctx.sink.events[3][1]["attempt"] == 1
     assert ctx.sink.events[3][1]["request_id"]
     assert ctx.sink.events[3][1]["pre_submit_diagnostics"]["url_path"] == "/create"
+
+
+def test_submit_generation_skips_if_create_was_already_attempted() -> None:
+    """A run-local submit guard should prevent accidental duplicate Create clicks."""
+    ctx = make_ctx(FakePage(["create_ready.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    ctx.extracted["suno_submit_generation_clicked"] = True
+    request = SongRequest.from_prompt("An original song about duplicate submit guards.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Create click was already attempted in this run"
+    assert ctx.page.clicks == []
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "create_click_skipped",
+        "generation_failed",
+    ]
+    assert ctx.sink.events[1][1]["reason"] == "create_click_already_attempted"
+
+
+def test_submit_generation_skips_if_generation_started_before_submit_phase() -> None:
+    """If filling triggered generation activity, the official submit must not click again."""
+    ctx = make_ctx(FakePage(["create_with_new_song.html"], selectors={CREATE_BUTTON_SELECTORS.selectors[0]}))
+    ctx.extracted["suno_pre_fill_result_keys"] = set()
+    request = SongRequest.from_prompt("An original song about pre-submit activity.")
+
+    result = asyncio.run(SubmitGeneration(request).execute(ctx))
+
+    assert result.outcome == "fail"
+    assert result.error == "Generation activity detected before official Create click"
+    assert ctx.page.clicks == []
+    assert [event[0] for event in ctx.sink.events] == [
+        "generation_pre_submit",
+        "create_click_skipped",
+        "generation_failed",
+    ]
+    assert ctx.sink.events[1][1]["reason"] == "generation_activity_before_submit"
+    assert ctx.sink.events[1][1]["diagnostics"]["pre_submit_new_result_count"] > 0
 
 
 def test_pre_submit_inspection_records_diagnostics_without_clicking_create() -> None:
@@ -1472,7 +1585,7 @@ def test_open_song_download_menu_dismisses_failed_candidates() -> None:
 
     assert opened is False
     assert page.keyboard_presses == ["Escape"]
-    assert page.mouse_clicks == [(10, 10)]
+    assert page.mouse_clicks == []
 
 
 def test_open_song_download_menu_clicks_download_action() -> None:

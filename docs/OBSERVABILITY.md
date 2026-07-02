@@ -187,7 +187,7 @@ Current event types:
 - `visit_step_started`: step name, safe page object id, URL path, and timestamp.
 - `visit_step_finished`: step name, outcome, error summary, duration, safe page object id, URL path, and timestamp.
 - `request_loaded`: request id, prompt, prompt hash, title/style flags, count, mode flags, and tags.
-- `ui_click`: semantic click source, selector group, selected selector, selector index, click method, bounding box, click point, safe page object id, URL path, and outcome.
+- `ui_click`: semantic click source, selector group, selected selector, selector index, locator click method, target bounding box, safe page object id, URL path, and outcome.
 - `generation_pre_submit`: request id, field summary, compact page state, button readiness, challenge visibility, challenge-frame provider counts, URL path, and timing diagnostics recorded before the official Create click.
 - `create_click_attempted`: request id, official submit phase, source, semantic click metadata, and pre-submit diagnostics.
 - `create_click_skipped`: request id, official submit phase, skip reason, compact page state, and diagnostics.
@@ -218,14 +218,16 @@ When investigating first-submit manual verification, use evidence in this order:
    was running when the page state changed. The runner records step lifecycle
    even when an earlier step fails and the plan continues.
 2. Inspect `ui_click` events before `submit_generation`. Each event records the
-   semantic source, selector group, selected selector, target index, bounding
-   box, click point, and safe page object id. This is the primary way to detect
-   whether an Advanced-mode helper clicked an unintended target before the
-   official Create step.
+   semantic source, selector group, selected selector, target index, locator
+   click method, target bounding box, and safe page object id. This is the
+   primary way to detect whether an Advanced-mode helper clicked an unintended
+   target before the official Create step.
 3. Inspect `create_click_skipped` and `create_click_attempted`. A safe blocked
    run should have `create_click_skipped` with a reason such as
    `blocked:manual_verification_required`, `create_button_disabled`, or
-   `create_button_selector_not_found`. A real automated submit attempt should
+   `create_button_selector_not_found`. Duplicate-submit protection can also
+   produce `generation_activity_before_submit` or `create_click_already_attempted`.
+   A real automated submit attempt should
    have `create_click_attempted` followed by `generation_submitted`.
 4. Compare `generation_pre_submit.diagnostics.challenge_frame_count`,
    `visible_challenge_frame_count`, and `challenge_frame_providers` with the

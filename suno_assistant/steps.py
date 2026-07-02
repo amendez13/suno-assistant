@@ -176,6 +176,7 @@ class FillSunoRequest:
 
     async def execute(self, ctx: VisitContext) -> StepResult:
         """Fill the prompt and supported optional fields."""
+        await _capture_pre_fill_result_baseline(ctx)
         if self.request.uses_advanced_controls:
             return await self._execute_advanced(ctx)
 
@@ -295,18 +296,37 @@ class SubmitGeneration:
         """Click the first available create/generate button."""
         state = await extract_create_page_state(ctx.page)
         ctx.extracted["suno_create_state"] = state
-        # Snapshot the songs visible before clicking Create. The new song appears
-        # in the workspace within seconds of submit, so this pre-click baseline is
-        # what lets the wait step recognise it as a *new* result.
-        ctx.extracted["suno_pre_submit_result_keys"] = {
-            key for key in (_result_key(result) for result in state.results) if key
-        }
+        baseline_keys = _baseline_result_keys(ctx, state)
+        ctx.extracted["suno_pre_submit_result_keys"] = baseline_keys
         diagnostics = await _pre_submit_diagnostics(ctx, state)
         ctx.extracted["suno_pre_submit_diagnostics"] = diagnostics
         await ctx.sink.write(
             "generation_pre_submit",
             generation_pre_submit_payload(self.request, state=state, diagnostics=diagnostics),
         )
+        pre_submit_new_keys = _result_keys_from_state(state) - baseline_keys
+        if bool(ctx.extracted.get("suno_submit_generation_clicked", False)):
+            return await _skip_create_click(
+                ctx,
+                self.request,
+                phase=self.name,
+                reason="create_click_already_attempted",
+                state=state,
+                diagnostics=diagnostics,
+                error="Create click was already attempted in this run",
+            )
+        if state.generation_in_progress or pre_submit_new_keys:
+            diagnostics["pre_submit_new_result_count"] = len(pre_submit_new_keys)
+            diagnostics["pre_submit_generation_in_progress"] = state.generation_in_progress
+            return await _skip_create_click(
+                ctx,
+                self.request,
+                phase=self.name,
+                reason="generation_activity_before_submit",
+                state=state,
+                diagnostics=diagnostics,
+                error="Generation activity detected before official Create click",
+            )
         if state.blocked_reason is not None:
             _increment_blocked_counters(ctx, state)
             await ctx.sink.write(
@@ -355,6 +375,7 @@ class SubmitGeneration:
             return StepResult(name=self.name, outcome="fail", error="Create button is disabled", extracted=state)
 
         await _gentle_action_pause(ctx, min_seconds=2.0, max_seconds=4.0)
+        ctx.extracted["suno_submit_generation_clicked"] = True
         clicked = await _click_first_available(
             ctx.page,
             CREATE_BUTTON_SELECTORS.selectors,
@@ -734,22 +755,59 @@ async def _fill_first_available(
         target, index = await _first_visible_locator_with_index(locator)
         if target is None:
             continue
-        if await _type_into_locator(
-            page,
-            target,
-            value,
-            rng=rng,
-            ctx=ctx,
-            selector_group=selector_group,
-            selector=selector,
-            selector_index=index,
-            phase=phase,
-            source=source,
-        ):
+        if await _fill_locator_value(target, value):
             return True
-        await target.fill(value)
-        return True
+        del index
     return False
+
+
+async def _fill_locator_value(target: Any, value: str) -> bool:
+    """Fill an editable text control and verify Suno kept the requested value."""
+    try:
+        await target.fill(value)
+    except Exception:
+        return False
+    return await _wait_for_locator_value(target, value)
+
+
+async def _wait_for_locator_value(target: Any, expected: str, *, timeout_seconds: float = 0.75) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    expected_value = _normalise_text_field_value(expected)
+    while True:
+        current_value = _normalise_text_field_value(await _text_field_value(target))
+        if current_value == expected_value:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
+
+
+async def _text_field_value(target: Any) -> str:
+    input_value = getattr(target, "input_value", None)
+    if callable(input_value):
+        try:
+            value = await input_value()
+            if value is not None:
+                return str(value)
+        except Exception:
+            pass
+    evaluate = getattr(target, "evaluate", None)
+    if callable(evaluate):
+        try:
+            value = await evaluate("""(node) => {
+                    if (node && "value" in node) return node.value || "";
+                    if (node && node.isContentEditable) return node.innerText || node.textContent || "";
+                    return node ? (node.textContent || "") : "";
+                }""")
+            if value is not None:
+                return str(value)
+        except Exception:
+            pass
+    return ""
+
+
+def _normalise_text_field_value(value: str) -> str:
+    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 async def _click_first_available(
@@ -839,6 +897,58 @@ async def _pre_submit_diagnostics(ctx: VisitContext, state: CreatePageState) -> 
     if isinstance(ready_checked_at, (int, float)):
         diagnostics["seconds_since_ready_check"] = round(max(0.0, now - float(ready_checked_at)), 3)
     return diagnostics
+
+
+async def _capture_pre_fill_result_baseline(ctx: VisitContext) -> None:
+    """Remember visible result identities before field filling can interact with the page."""
+    if "suno_pre_fill_result_keys" in ctx.extracted:
+        return
+    state = await extract_create_page_state(ctx.page)
+    ctx.extracted["suno_pre_fill_result_keys"] = _result_keys_from_state(state)
+
+
+def _baseline_result_keys(ctx: VisitContext, state: CreatePageState) -> set[str]:
+    """Return the safest baseline for deciding whether submit already happened."""
+    pre_fill_keys = ctx.extracted.get("suno_pre_fill_result_keys")
+    if isinstance(pre_fill_keys, set):
+        return pre_fill_keys
+    # Snapshot the songs visible before clicking Create. The new song appears
+    # in the workspace within seconds of submit, so this pre-click baseline is
+    # what lets the wait step recognise it as a *new* result.
+    return _result_keys_from_state(state)
+
+
+def _result_keys_from_state(state: CreatePageState) -> set[str]:
+    """Build stable keys for visible song results in a create-page state."""
+    return {key for key in (_result_key(result) for result in state.results) if key}
+
+
+async def _skip_create_click(
+    ctx: VisitContext,
+    request: SongRequest,
+    *,
+    phase: str,
+    reason: str,
+    state: CreatePageState,
+    diagnostics: dict[str, Any],
+    error: str,
+) -> StepResult:
+    """Record an intentional Create skip and fail closed before duplicate submit."""
+    await ctx.sink.write(
+        "create_click_skipped",
+        create_click_skipped_payload(
+            request,
+            phase=phase,
+            reason=reason,
+            state=state,
+            diagnostics=diagnostics,
+        ),
+    )
+    await ctx.sink.write(
+        "generation_failed",
+        generation_failed_payload(request, phase=phase, error=error, state=state),
+    )
+    return StepResult(name=phase, outcome="fail", error=error, extracted=state)
 
 
 def _safe_url_path(url: str) -> str:
@@ -935,45 +1045,17 @@ async def _click_locator_with_evidence(
 
 
 async def _click_locator(page: Any, target: Any, *, rng: Any | None = None) -> dict[str, Any]:
+    del page, rng
     box = None
     try:
         box = await target.bounding_box()
     except Exception:
         box = None
 
-    mouse = getattr(page, "mouse", None)
-    mouse_move = getattr(mouse, "move", None)
-    mouse_click = getattr(mouse, "click", None)
-    if isinstance(box, dict) and callable(mouse_move) and callable(mouse_click):
-        width = float(box.get("width", 0.0))
-        height = float(box.get("height", 0.0))
-        if width > 0 and height > 0:
-            sampler = rng if rng is not None else None
-            uniform = getattr(sampler, "uniform", None)
-            randint = getattr(sampler, "randint", None)
-            x_ratio = uniform(0.35, 0.65) if callable(uniform) else 0.5
-            y_ratio = uniform(0.35, 0.65) if callable(uniform) else 0.5
-            steps = randint(4, 10) if callable(randint) else 6
-            x = float(box.get("x", 0.0)) + width * x_ratio
-            y = float(box.get("y", 0.0)) + height * y_ratio
-            try:
-                await mouse_move(x, y, steps=steps)
-                await mouse_click(x, y)
-                return {
-                    "method": "mouse",
-                    "bounding_box": _box_payload(box),
-                    "click_point": {"x": round(x, 1), "y": round(y, 1)},
-                    "pointer_steps": steps,
-                }
-            except Exception as exc:
-                fallback_error = _safe_error(exc)
-                pass
     await target.click()
     payload: dict[str, Any] = {"method": "locator"}
     if isinstance(box, dict):
         payload["bounding_box"] = _box_payload(box)
-    if "fallback_error" in locals():
-        payload["fallback_error"] = fallback_error
     return payload
 
 
@@ -1246,10 +1328,6 @@ async def _open_song_download_menu(ctx: VisitContext) -> bool:
 async def _dismiss_song_overlay(ctx: VisitContext) -> None:
     try:
         await ctx.page.keyboard.press("Escape")
-    except Exception:
-        pass
-    try:
-        await ctx.page.mouse.click(10, 10)
     except Exception:
         pass
     await _gentle_action_pause(ctx)
@@ -1609,12 +1687,16 @@ async def _set_slider_first_available(ctx: VisitContext, selectors: tuple[str, .
         target = await _first_visible_locator(locator)
         if target is None:
             continue
-        current_value = await _slider_current_value(target)
-        if current_value is None:
-            continue
-        await target.focus()
-        await _nudge_slider_to_value(ctx, current_value=current_value, target_value=bounded_value)
-        return True
+        for _ in range(3):
+            current_value = await _slider_current_value(target)
+            if current_value is None:
+                break
+            if current_value == bounded_value:
+                return True
+            await target.focus()
+            await _nudge_slider_to_value(ctx, current_value=current_value, target_value=bounded_value)
+            if await _wait_for_slider_value(target, bounded_value):
+                return True
     return False
 
 
@@ -1636,6 +1718,17 @@ async def _nudge_slider_to_value(ctx: VisitContext, *, current_value: int, targe
     for _ in range(abs(delta)):
         await ctx.page.keyboard.press(key)
         await _gentle_key_pause(ctx)
+
+
+async def _wait_for_slider_value(locator: Any, target_value: int, *, timeout_seconds: float = 1.5) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        current_value = await _slider_current_value(locator)
+        if current_value == target_value:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
 
 
 async def _gentle_key_pause(ctx: VisitContext, *, min_seconds: float = 0.015, max_seconds: float = 0.045) -> None:
